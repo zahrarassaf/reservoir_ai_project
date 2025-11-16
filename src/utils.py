@@ -1,13 +1,17 @@
 """
-hyperparameter_tuning.py
-Small wrappers to run GridSearch for SVR; Keras Tuner optional for CNN-LSTM.
+utils.py
+Utility helpers for plotting and I/O.
 """
+import os
+import matplotlib.pyplot as plt
 
-from sklearn.model_selection import GridSearchCV
-from sklearn.svm import SVR
+def ensure_dirs():
+    os.makedirs("results/figures", exist_ok=True)
+    os.makedirs("models", exist_ok=True)
+    os.makedirs("data/processed", exist_ok=True)
 
-def tune_svr(X_train_scaled, y_train_scaled, cv=3, n_jobs=-1):
-    param_grid = {'C':[1,10,50], 'epsilon':[0.01,0.1,0.5], 'kernel':['rbf']}
-    grid = GridSearchCV(SVR(), param_grid, scoring='neg_mean_squared_error', cv=cv, n_jobs=n_jobs)
-    grid.fit(X_train_scaled, y_train_scaled)
-    return grid.best_estimator_, grid.best_params_
+def save_plot(fig, fname: str):
+    ensure_dirs()
+    path = os.path.join("results/figures", fname)
+    fig.savefig(path, bbox_inches='tight')
+    print(f"Saved plot: {path}")
