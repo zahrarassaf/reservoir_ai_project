@@ -1,11 +1,13 @@
-import matplotlib.pyplot as plt
+"""
+hyperparameter_tuning.py
+Small wrappers to run GridSearch for SVR; Keras Tuner optional for CNN-LSTM.
+"""
 
-def plot_predictions(y_true, y_pred, title="Predictions"):
-    plt.figure(figsize=(10,5))
-    plt.plot(y_true, label='Actual')
-    plt.plot(y_pred, label='Predicted')
-    plt.title(title)
-    plt.xlabel("Time step")
-    plt.ylabel("Value")
-    plt.legend()
-    plt.show()
+from sklearn.model_selection import GridSearchCV
+from sklearn.svm import SVR
+
+def tune_svr(X_train_scaled, y_train_scaled, cv=3, n_jobs=-1):
+    param_grid = {'C':[1,10,50], 'epsilon':[0.01,0.1,0.5], 'kernel':['rbf']}
+    grid = GridSearchCV(SVR(), param_grid, scoring='neg_mean_squared_error', cv=cv, n_jobs=n_jobs)
+    grid.fit(X_train_scaled, y_train_scaled)
+    return grid.best_estimator_, grid.best_params_
