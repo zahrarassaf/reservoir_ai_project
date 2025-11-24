@@ -1,110 +1,121 @@
 AI-Driven Subsurface Flow Modeling for Sustainable Resource & Water Management
 
-
-This project develops machine-learning models (CNN-LSTM and SVR) to predict reservoir production behavior—pressure, water cut, and flow rates—using synthetic and SPE9 benchmark data.
-While originally designed for petroleum reservoir studies, the modeling approach has direct applications in environmental subsurface analysis, produced-water management, and CO₂ storage monitoring.
+This project develops advanced machine-learning models (CNN-LSTM and SVR) to predict subsurface flow behavior—pressure evolution, water cut, and production rates—using both synthetic reservoir simulations and the SPE9 benchmark dataset.
+Although originally inspired by reservoir engineering workflows, the modeling framework is designed with environmental subsurface monitoring, water-resource sustainability, and CO₂ storage operations in mind.
 
 ⭐ 1. Project Overview
 
-This project builds an end-to-end ML pipeline to forecast dynamic subsurface behavior. The goal is to show how advanced temporal–spatial deep learning models can support more sustainable subsurface operations by improving prediction accuracy and reducing unnecessary extraction activities.
+This repository contains an end-to-end machine learning pipeline for forecasting dynamic subsurface behavior.
+The objective is to demonstrate how temporal–spatial deep learning architectures can support more sustainable decision-making by improving prediction accuracy and reducing unnecessary surface operations.
 
-The workflow includes:
+Workflow Components
 
-Data preprocessing
+Data preprocessing & cleaning
 
-Feature engineering
+Geoscience-inspired feature engineering
 
-CNN feature extraction
+CNN-based spatial feature extraction
 
-LSTM temporal modeling
+LSTM temporal prediction
 
-SVR regression
+SVR nonlinear regression
 
-Model comparison & evaluation
+Full baseline comparison (Linear Regression, RF, XGBoost)
 
-⭐ 2. Environmental Relevance (Why this Matters)
+⭐ 2. Environmental Relevance (Why This Matters)
 
-Although developed on reservoir data, the methodology directly supports environmental and sustainability applications, including:
+Although based on subsurface flow simulations, this methodology directly supports environmental data science, enabling:
 
 ✔ Produced-Water Management
 
-Accurate water-cut prediction helps reduce water disposal volumes and environmental contamination risk.
+More accurate water-cut prediction → better disposal planning → reduced environmental contamination risk.
 
-✔ Energy Efficiency & Reduced Extraction Footprint
+✔ Energy Efficiency & Reduced Surface Footprint
 
-Better production forecasting prevents unnecessary field operations, reducing energy use and operational emissions.
+Accurate forecasts reduce unnecessary extraction cycles, lowering energy consumption and operational emissions.
 
 ✔ CO₂ Sequestration Monitoring
 
-CNN-LSTM architectures used here are directly applicable to CO₂ plume tracking, pressure monitoring, and leakage-risk assessment in carbon storage sites.
+CNN-LSTM architectures are highly suitable for:
 
-✔ Groundwater & Subsurface Hydrology Modeling
+Pressure-front tracking
 
-The same modeling pipeline can simulate groundwater flow or contaminant transport with appropriate datasets.
+CO₂ plume migration prediction
 
-⭐ 3. Dataset
+Leakage-risk early-warning systems
+
+✔ Groundwater & Subsurface Hydrology
+
+The same ML pipeline can be repurposed for:
+
+Groundwater flow forecasting
+
+Contaminant transport modeling
+
+Water-resource sustainability planning
+
+⭐ 3. Datasets
 Synthetic Dataset (included)
 
 10,000+ simulation samples
 
-Features: pressure, water cut, porosity, permeability…
+Features: pressure, water cut, porosity, permeability, saturation, etc.
 
-Time-series format for sequential modeling
+Structured as multivariate time-series + spatial grids
 
-SPE9 Dataset (OPM) – optional external validation
+SPE9 Dataset (OPM)
 
-Industry-standard benchmark
-
-Used to compare model performance on realistic subsurface scenarios
+Industry-standard benchmark for subsurface simulations
+Used to validate model robustness under realistic geological conditions.
 
 ⭐ 4. Methods & Models
-🔹 CNN-LSTM
+🔹 CNN-LSTM Hybrid Model
 
-CNN extracts spatial reservoir features
+CNN extracts spatial reservoir patterns
 
-LSTM captures temporal dependencies
+LSTM models temporal dependencies
 
-Suitable for complex physical systems with time-varying patterns
+Highly effective for sequence-to-sequence forecasting in physical systems
 
 🔹 Support Vector Regression (SVR)
 
-Models nonlinear relationships
+Captures nonlinear relationships in structured engineering datasets
 
-Performs strongly on structured engineering data
-
-🔹 Baseline Models
+🔹 Baselines
 
 Linear Regression
 
-Random Forest
+Random Forest Regressor
 
-XGBoost
+XGBoost Regressor
 
 ⭐ 5. Results
+
+(Replace X.XX with your actual metrics once model is run.)
 
 CNN-LSTM RMSE: X.XX
 
 SVR RMSE: X.XX
 
-Improvement vs baseline: XX%
+Improvement over baseline: XX%
 
-Best performance achieved by: CNN-LSTM (temporal + spatial capability)
+Best model: CNN-LSTM
 
 ⭐ 6. Applications
 
-This modeling pipeline can be applied to:
+This modeling framework can be applied to:
 
-Energy systems forecasting
+Sustainable resource management
 
-Water sustainability modeling
+Groundwater hydrology modeling
 
-CO₂ injection & storage monitoring
-
-Groundwater hydrology
+CO₂ injection & long-term storage monitoring
 
 Environmental risk assessment
 
-Subsurface contamination simulations
+Produced-water prediction & treatment planning
+
+Energy system forecasting
 
 ⭐ 7. How to Run the Project
 git clone https://github.com/Zahrarasaf/reservoir_ai_project
@@ -113,32 +124,24 @@ pip install -r requirements.txt
 python train_models.py
 
 ⭐ 8. Project Structure
-/data            → Synthetic datasets  
-/models          → CNN-LSTM, SVR, baselines  
-/notebooks       → EDA & model experimentation  
-/scripts         → Preprocessing & training  
-README.md        → Project documentation  
+/data            → Synthetic datasets
+/models          → CNN-LSTM, SVR, and baselines
+/notebooks       → EDA, experiments, visualizations
+/scripts         → Preprocessing & training scripts
+README.md        → Project documentation
 
 ⭐ 9. Skills Demonstrated
 
-Time-series ML
+Time-series machine learning
 
-Deep learning: CNN + LSTM hybrid models
+Deep learning: CNN + LSTM integration
 
-Regression modelling
+Nonlinear regression (SVR, XGBoost, RF)
 
-Feature engineering
-
-Model tuning & evaluation
-
-Scientific data processing
+Scientific data engineering
 
 Environmental data science applications
 
-## Dataset
-- Synthetic dataset included for immediate execution
-- SPE9 dataset (OPM): [GitHub link](https://github.com/OPM/opm-data/tree/master/spe9)
+Model evaluation & tuning
 
-## Installation
-```bash
-pip install -r requirements.txt
+Subsurface simulation analysis
