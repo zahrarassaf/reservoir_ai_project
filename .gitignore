@@ -1,29 +1,19 @@
-# Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Virtual envs
-venv/
-env/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
 *.egg-info/
-
-# Jupyter
-.ipynb_checkpoints/
-
-# Data - do not commit raw heavy data
-data/raw/
-# If you prefer to not commit generated CSV, uncomment:
-# data/processed/*.csv
-
-# Models / outputs
-results/
-models/
-
-# OS files
+.ipynb_checkpoints
+.vscode/
+.idea/
+*.swp
+*.swo
 .DS_Store
 Thumbs.db
-
-# Logs
-*.log
+.env
+venv/
+*.pkl
+*.joblib
