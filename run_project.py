@@ -1,6 +1,6 @@
 """
 MAIN EXECUTION FILE - Run this to train models
-FIXED VERSION - Correct imports and error handling
+FINAL FIXED VERSION
 """
 import numpy as np
 import pandas as pd
@@ -11,25 +11,31 @@ from sklearn.metrics import mean_squared_error, r2_score
 import matplotlib.pyplot as plt
 import joblib
 
-# Fix import path - Add current directory to path
-sys.path.insert(0, os.path.dirname(__file__))
+# Fix import paths
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, current_dir)
 
+# Import modules with error handling
 try:
+    # Try absolute import first
     from src.data_preprocessing import generate_synthetic_spe9, build_feature_table
     from src.cnn_lstm_model import build_cnn_lstm, train_cnn_lstm_model
     from src.svr_model import train_svr, evaluate_svr
     from src.hyperparameter_tuning import tune_svr
     from src.utils import ensure_dirs
-    print("✅ All imports successful")
-except ImportError as e:
-    print(f"❌ Import error: {e}")
-    print("Trying alternative import...")
-    # Alternative import attempt
-    from data_preprocessing import generate_synthetic_spe9, build_feature_table
-    from cnn_lstm_model import build_cnn_lstm, train_cnn_lstm_model
-    from svr_model import train_svr, evaluate_svr
-    from hyperparameter_tuning import tune_svr
-    from utils import ensure_dirs
+    print("✅ All imports successful using absolute imports")
+except ImportError:
+    try:
+        # Fallback to relative imports
+        from data_preprocessing import generate_synthetic_spe9, build_feature_table
+        from cnn_lstm_model import build_cnn_lstm, train_cnn_lstm_model
+        from svr_model import train_svr, evaluate_svr
+        from hyperparameter_tuning import tune_svr
+        from utils import ensure_dirs
+        print("✅ All imports successful using relative imports")
+    except ImportError as e:
+        print(f"❌ All import attempts failed: {e}")
+        sys.exit(1)
 
 def create_sequences(X, y, sequence_length=10):
     """Create sequences from tabular data for CNN-LSTM"""
@@ -46,7 +52,7 @@ def create_sequences(X, y, sequence_length=10):
 
 def main():
     """Main training pipeline"""
-    print("🚀 Starting Reservoir AI Project - FIXED VERSION")
+    print("🚀 Starting Reservoir AI Project - FINAL VERSION")
     print("=" * 60)
     
     # Ensure directories exist
@@ -97,34 +103,39 @@ def main():
         
         print(f"Sequential data - Train: {X_train_seq.shape}, Test: {X_test_seq.shape}")
         
+        cnn_lstm_results = {"rmse": np.nan, "r2": np.nan, "y_pred": None}
+        
         if len(X_train_seq) > 0:
-            # Build and train CNN-LSTM
-            input_shape = (X_train_seq.shape[1], X_train_seq.shape[2])
-            print(f"Building CNN-LSTM with input shape: {input_shape}")
-            
-            cnn_lstm_model = build_cnn_lstm(input_shape)
-            
-            history, model_path = train_cnn_lstm_model(
-                cnn_lstm_model, X_train_seq, y_train_seq, 
-                X_test_seq, y_test_seq, epochs=50, batch_size=16
-            )
-            
-            # Evaluate CNN-LSTM
-            y_pred_cnn = cnn_lstm_model.predict(X_test_seq).flatten()
-            cnn_rmse = np.sqrt(mean_squared_error(y_test_seq, y_pred_cnn))
-            cnn_r2 = r2_score(y_test_seq, y_pred_cnn)
-            print(f"✅ CNN-LSTM Results - RMSE: {cnn_rmse:.4f}, R²: {cnn_r2:.4f}")
+            try:
+                # Build and train CNN-LSTM
+                input_shape = (X_train_seq.shape[1], X_train_seq.shape[2])
+                print(f"Building CNN-LSTM with input shape: {input_shape}")
+                
+                cnn_lstm_model = build_cnn_lstm(input_shape)
+                
+                history, model_path = train_cnn_lstm_model(
+                    cnn_lstm_model, X_train_seq, y_train_seq, 
+                    X_test_seq, y_test_seq, epochs=50, batch_size=16
+                )
+                
+                # Evaluate CNN-LSTM
+                y_pred_cnn = cnn_lstm_model.predict(X_test_seq).flatten()
+                cnn_lstm_results["rmse"] = np.sqrt(mean_squared_error(y_test_seq, y_pred_cnn))
+                cnn_lstm_results["r2"] = r2_score(y_test_seq, y_pred_cnn)
+                cnn_lstm_results["y_pred"] = y_pred_cnn
+                print(f"✅ CNN-LSTM Results - RMSE: {cnn_lstm_results['rmse']:.4f}, R²: {cnn_lstm_results['r2']:.4f}")
+                
+            except Exception as e:
+                print(f"⚠️ CNN-LSTM training failed: {e}")
         else:
             print("⚠️ Not enough data for CNN-LSTM sequences")
-            y_pred_cnn = None
-            cnn_rmse = cnn_r2 = np.nan
         
         # 6. Compare results
         print("\n📊 Step 4: Model Comparison")
         print("=" * 40)
         results_data = [
             {"Model": "SVR", "RMSE": svr_results['rmse'], "R²": svr_results['r2']},
-            {"Model": "CNN-LSTM", "RMSE": cnn_rmse, "R²": cnn_r2}
+            {"Model": "CNN-LSTM", "RMSE": cnn_lstm_results['rmse'], "R²": cnn_lstm_results['r2']}
         ]
         results_df = pd.DataFrame(results_data)
         print(results_df.to_string(index=False))
@@ -135,62 +146,7 @@ def main():
         
         # 8. Create visualizations
         print("\n📈 Step 5: Creating visualizations...")
-        plt.figure(figsize=(15, 10))
-        
-        # Plot 1: Model comparison
-        plt.subplot(2, 3, 1)
-        models = ['SVR', 'CNN-LSTM']
-        rmse_values = [svr_results['rmse'], cnn_rmse if not np.isnan(cnn_rmse) else 0]
-        colors = ['skyblue', 'lightcoral']
-        plt.bar(models, rmse_values, color=colors)
-        plt.title('Model RMSE Comparison')
-        plt.ylabel('RMSE')
-        
-        # Plot 2: R² comparison
-        plt.subplot(2, 3, 2)
-        r2_values = [svr_results['r2'], cnn_r2 if not np.isnan(cnn_r2) else 0]
-        plt.bar(models, r2_values, color=colors)
-        plt.title('R² Score Comparison')
-        plt.ylabel('R² Score')
-        plt.ylim(0, 1)
-        
-        # Plot 3: Predictions vs Actual
-        plt.subplot(2, 3, 3)
-        sample_size = min(50, len(y_test))
-        plt.plot(y_test[:sample_size], label='Actual', linewidth=2, color='black')
-        plt.plot(svr_results['y_pred'][:sample_size], label='SVR Pred', alpha=0.7)
-        if y_pred_cnn is not None and len(y_pred_cnn) >= sample_size:
-            plt.plot(y_pred_cnn[:sample_size], label='CNN-LSTM Pred', alpha=0.7)
-        plt.title('Predictions vs Actual')
-        plt.legend()
-        
-        # Plot 4: Residuals SVR
-        plt.subplot(2, 3, 4)
-        svr_residuals = y_test - svr_results['y_pred']
-        plt.hist(svr_residuals, bins=20, alpha=0.7, color='skyblue')
-        plt.title('SVR Residual Distribution')
-        plt.xlabel('Residuals')
-        
-        # Plot 5: Feature importance
-        plt.subplot(2, 3, 5)
-        if hasattr(svr_trained['model'], 'coef_'):
-            importance = np.abs(svr_trained['model'].coef_)
-            if len(importance) > 0:
-                top_indices = np.argsort(importance)[-8:]  # Top 8 features
-                top_features = [feature_cols[i] for i in top_indices]
-                plt.barh(range(len(top_features)), importance[top_indices])
-                plt.yticks(range(len(top_features)), top_features)
-                plt.title('Top Feature Importance (SVR)')
-        
-        # Plot 6: Data distribution
-        plt.subplot(2, 3, 6)
-        plt.hist(y, bins=30, alpha=0.7, color='lightgreen')
-        plt.title('Target Variable Distribution')
-        plt.xlabel('FlowRate')
-        
-        plt.tight_layout()
-        plt.savefig('results/model_comparison.png', dpi=300, bbox_inches='tight')
-        plt.show()
+        self.create_visualizations(svr_results, cnn_lstm_results, y_test, feature_cols, svr_trained)
         
         print("\n🎉 PROJECT EXECUTED SUCCESSFULLY!")
         print("📁 Results saved to:")
@@ -205,6 +161,92 @@ def main():
         import traceback
         traceback.print_exc()
         return None
+
+def create_visualizations(svr_results, cnn_lstm_results, y_test, feature_cols, svr_trained):
+    """Create comprehensive visualizations"""
+    plt.figure(figsize=(15, 10))
+    
+    # Plot 1: Model comparison
+    plt.subplot(2, 3, 1)
+    models = ['SVR', 'CNN-LSTM']
+    rmse_values = [
+        svr_results['rmse'], 
+        cnn_lstm_results['rmse'] if not np.isnan(cnn_lstm_results['rmse']) else 0
+    ]
+    colors = ['skyblue', 'lightcoral']
+    bars = plt.bar(models, rmse_values, color=colors)
+    plt.title('Model RMSE Comparison')
+    plt.ylabel('RMSE')
+    
+    # Add value labels on bars
+    for bar, value in zip(bars, rmse_values):
+        plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01, 
+                f'{value:.4f}', ha='center', va='bottom')
+    
+    # Plot 2: R² comparison
+    plt.subplot(2, 3, 2)
+    r2_values = [
+        svr_results['r2'], 
+        cnn_lstm_results['r2'] if not np.isnan(cnn_lstm_results['r2']) else 0
+    ]
+    bars = plt.bar(models, r2_values, color=colors)
+    plt.title('R² Score Comparison')
+    plt.ylabel('R² Score')
+    plt.ylim(0, 1)
+    
+    # Add value labels on bars
+    for bar, value in zip(bars, r2_values):
+        plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01, 
+                f'{value:.4f}', ha='center', va='bottom')
+    
+    # Plot 3: Predictions vs Actual
+    plt.subplot(2, 3, 3)
+    sample_size = min(50, len(y_test))
+    plt.plot(y_test[:sample_size], label='Actual', linewidth=2, color='black')
+    plt.plot(svr_results['y_pred'][:sample_size], label='SVR Pred', alpha=0.7, linewidth=1.5)
+    
+    if cnn_lstm_results['y_pred'] is not None and len(cnn_lstm_results['y_pred']) >= sample_size:
+        plt.plot(cnn_lstm_results['y_pred'][:sample_size], label='CNN-LSTM Pred', alpha=0.7, linewidth=1.5)
+    
+    plt.title('Predictions vs Actual (First 50 Samples)')
+    plt.xlabel('Sample Index')
+    plt.ylabel('FlowRate')
+    plt.legend()
+    
+    # Plot 4: Residuals SVR
+    plt.subplot(2, 3, 4)
+    svr_residuals = y_test - svr_results['y_pred']
+    plt.hist(svr_residuals, bins=20, alpha=0.7, color='skyblue', edgecolor='black')
+    plt.title('SVR Residual Distribution')
+    plt.xlabel('Residuals')
+    plt.ylabel('Frequency')
+    
+    # Plot 5: Feature importance
+    plt.subplot(2, 3, 5)
+    if hasattr(svr_trained['model'], 'coef_'):
+        importance = np.abs(svr_trained['model'].coef_)
+        if len(importance) > 0:
+            # Get top 6 features
+            top_n = min(6, len(importance))
+            top_indices = np.argsort(importance)[-top_n:]
+            top_importance = importance[top_indices]
+            top_features = [feature_cols[i] for i in top_indices]
+            
+            plt.barh(range(len(top_features)), top_importance, color='lightgreen', edgecolor='black')
+            plt.yticks(range(len(top_features)), top_features)
+            plt.title(f'Top {top_n} Feature Importance (SVR)')
+            plt.xlabel('Importance (abs coefficient)')
+    
+    # Plot 6: Data distribution
+    plt.subplot(2, 3, 6)
+    plt.hist(y_test, bins=20, alpha=0.7, color='orange', edgecolor='black')
+    plt.title('Test Set Target Distribution')
+    plt.xlabel('FlowRate')
+    plt.ylabel('Frequency')
+    
+    plt.tight_layout()
+    plt.savefig('results/model_comparison.png', dpi=300, bbox_inches='tight')
+    plt.show()
 
 if __name__ == "__main__":
     results = main()
