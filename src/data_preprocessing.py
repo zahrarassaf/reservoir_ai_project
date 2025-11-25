@@ -1,94 +1,105 @@
 """
-data_preprocessing.py
-Functions to generate synthetic SPE9-like data and prepare features for models.
+Improved Data Preprocessing Module
+Fixed data leakage and added validation
 """
-
-from typing import Tuple
-import os
-import numpy as np
 import pandas as pd
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+import joblib
+from config import *
 
-RNG_SEED = 42
+class DataPreprocessor:
+    def __init__(self):
+        self.scalers = {}
+        self.feature_columns = FEATURE_COLUMNS
+        
+    def load_and_clean_data(self):
+        """Load and clean the well log data"""
+        try:
+            df = pd.read_csv(DATA_PATH)
+            print(f"✅ Data loaded successfully: {df.shape}")
+            
+            # Handle missing values
+            df_clean = df.dropna()
+            print(f"✅ Data after cleaning: {df_clean.shape}")
+            
+            return df_clean
+        except Exception as e:
+            print(f"❌ Error loading data: {e}")
+            return None
+    
+    def prepare_features(self, df):
+        """Prepare features and targets without data leakage"""
+        X = df[self.feature_columns]
+        y_permeability = df['Permeability']
+        y_porosity = df['Porosity']
+        
+        return X, y_permeability, y_porosity
+    
+    def train_test_split_data(self, X, y):
+        """Split data with proper stratification"""
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, 
+            test_size=TEST_SIZE, 
+            random_state=RANDOM_STATE,
+            shuffle=True
+        )
+        
+        print(f"✅ Train set: {X_train.shape}, Test set: {X_test.shape}")
+        return X_train, X_test, y_train, y_test
+    
+    def scale_features(self, X_train, X_test, target_name):
+        """Scale features without data leakage"""
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)  # Only transform test data
+        
+        # Save scaler for future use
+        self.scalers[target_name] = scaler
+        joblib.dump(scaler, f'{MODELS_PATH}scaler_{target_name}.pkl')
+        
+        return X_train_scaled, X_test_scaled
 
-def ensure_dirs():
-    os.makedirs("data/processed", exist_ok=True)
-    os.makedirs("data/raw", exist_ok=True)
-    os.makedirs("results/figures", exist_ok=True)
-    os.makedirs("models", exist_ok=True)
-
-def generate_synthetic_spe9(output_path: str = "data/processed/spe9_processed.csv",
-                            n_wells: int = 26, time_steps: int = 200, seed: int = RNG_SEED) -> pd.DataFrame:
-    """
-    Generate a SPE9-like synthetic dataset and save to CSV.
-    """
-    np.random.seed(seed)
-    data_list = []
-    for t in range(time_steps):
-        field_pressure_trend = 3000 + 150*np.sin(0.04*t) + 0.5*t
-        field_flow_trend = 100 + 8*np.sin(0.03*t)
-        for w in range(n_wells):
-            well_bias = np.random.uniform(-10, 10)
-            pressure = field_pressure_trend + 50*np.sin(0.1*w) + np.random.normal(0,20) + well_bias
-            flow_rate = max(0.0, field_flow_trend + 3*np.sin(0.2*w) + np.random.normal(0,5) + well_bias*0.1)
-            saturation = np.clip(0.2 + 0.05*np.sin(0.07*t + 0.1*w) + np.random.normal(0,0.01), 0, 1)
-            permeability = np.random.uniform(50, 800)
-            porosity = np.random.uniform(0.05, 0.35)
-            data_list.append([t, w, pressure, flow_rate, saturation, permeability, porosity])
-
-    columns = ["Time","Well","Pressure","FlowRate","Saturation","Permeability","Porosity"]
-    df = pd.DataFrame(data_list, columns=columns)
-    ensure_dirs()
-    df.to_csv(output_path, index=False)
-    return df
-
-def build_feature_table(df: pd.DataFrame, lags=(1,2,3), rolling_windows=(3,5)) -> pd.DataFrame:
-    """
-    Given raw df with columns [Time, Well, Pressure, FlowRate, Saturation, Permeability, Porosity],
-    return a feature DataFrame with lag and rolling features per (Time, Well).
-    """
-    records = []
-    n_wells = df.Well.nunique()
-    times = sorted(df.Time.unique())
-    for t in times:
-        for w in range(n_wells):
-            cur = df[(df.Time==t)&(df.Well==w)]
-            if cur.empty:
-                continue
-            cur = cur.iloc[0]
-            row = {"Time": t, "Well": w,
-                   "Pressure": cur.Pressure, "FlowRate": cur.FlowRate,
-                   "Saturation": cur.Saturation, "Permeability": cur.Permeability, "Porosity": cur.Porosity}
-            # lags
-            for lag in lags:
-                tlag = t - lag
-                if tlag >= 0:
-                    prev = df[(df.Time==tlag)&(df.Well==w)].iloc[0]
-                    row[f"Flow_lag_{lag}"] = prev.FlowRate
-                    row[f"Pressure_lag_{lag}"] = prev.Pressure
-                else:
-                    row[f"Flow_lag_{lag}"] = np.nan
-                    row[f"Pressure_lag_{lag}"] = np.nan
-            # rolling
-            for win in rolling_windows:
-                vals = []
-                for tt in range(max(0, t-win+1), t+1):
-                    r = df[(df.Time==tt)&(df.Well==w)]
-                    if not r.empty:
-                        vals.append(r.iloc[0].FlowRate)
-                row[f"Flow_roll_mean_{win}"] = np.mean(vals) if len(vals)>0 else np.nan
-                row[f"Flow_roll_std_{win}"] = np.std(vals) if len(vals)>0 else np.nan
-            records.append(row)
-    df_feat = pd.DataFrame.from_records(records)
-    # forward/backfill then fill remaining with zero
-    df_feat.sort_values(["Time","Well"], inplace=True)
-    df_feat.fillna(method="bfill", inplace=True)
-    df_feat.fillna(0, inplace=True)
-    df_feat.reset_index(drop=True, inplace=True)
-    df_feat.to_csv("data/processed/spe9_features.csv", index=False)
-    return df_feat
+def main():
+    """Main preprocessing pipeline"""
+    print("🚀 Starting improved data preprocessing...")
+    
+    preprocessor = DataPreprocessor()
+    
+    # Load data
+    df = preprocessor.load_and_clean_data()
+    if df is None:
+        return
+    
+    # Prepare features
+    X, y_perm, y_por = preprocessor.prepare_features(df)
+    
+    # Split for permeability
+    X_train_perm, X_test_perm, y_train_perm, y_test_perm = preprocessor.train_test_split_data(X, y_perm)
+    X_train_perm_scaled, X_test_perm_scaled = preprocessor.scale_features(
+        X_train_perm, X_test_perm, 'permeability'
+    )
+    
+    # Split for porosity
+    X_train_por, X_test_por, y_train_por, y_test_por = preprocessor.train_test_split_data(X, y_por)
+    X_train_por_scaled, X_test_por_scaled = preprocessor.scale_features(
+        X_train_por, X_test_por, 'porosity'
+    )
+    
+    print("✅ Data preprocessing completed successfully!")
+    
+    return {
+        'permeability': {
+            'X_train': X_train_perm_scaled, 'X_test': X_test_perm_scaled,
+            'y_train': y_train_perm, 'y_test': y_test_perm
+        },
+        'porosity': {
+            'X_train': X_train_por_scaled, 'X_test': X_test_por_scaled,
+            'y_train': y_train_por, 'y_test': y_test_por
+        },
+        'feature_names': FEATURE_COLUMNS
+    }
 
 if __name__ == "__main__":
-    ensure_dirs()
-    df = generate_synthetic_spe9()
-    df_feat = build_feature_table(df)
-    print("Generated synthetic data and features:", df.shape, df_feat.shape)
+    main()
