@@ -7,3 +7,8 @@ seaborn==0.12.2
 joblib==1.2.0
 shap==0.41.0
 jupyter==1.0.0
+notebook==6.5.4
+scipy==1.7.3
+statsmodels==0.13.5
+ipywidgets==8.0.6
+tqdm==4.64.1
