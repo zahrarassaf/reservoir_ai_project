@@ -1,5 +1,6 @@
 """
 CNN-LSTM Model for Reservoir Forecasting
+FIXED VERSION - Proper input shape and architecture
 """
 import os
 import numpy as np
@@ -16,7 +17,10 @@ def build_cnn_lstm(input_shape: tuple,
                    lstm_units: int = 64,
                    dense_units: int = 32,
                    dropout: float = 0.3):
-    """Build CNN-LSTM model with proper architecture"""
+    """
+    Build CNN-LSTM model
+    input_shape: (sequence_length, n_features)
+    """
     model = Sequential([
         Conv1D(conv_filters, kernel_size=3, activation='relu', 
                input_shape=input_shape, padding='same'),
@@ -33,16 +37,21 @@ def build_cnn_lstm(input_shape: tuple,
     model.compile(optimizer=Adam(learning_rate=0.001), 
                   loss='mse', 
                   metrics=['mae'])
+    
+    print(f"✅ CNN-LSTM model built with input shape: {input_shape}")
     return model
 
 def train_cnn_lstm_model(model, X_train, y_train, X_val, y_val,
                          epochs: int = 100, batch_size: int = 32,
                          model_path: str = os.path.join(MODEL_DIR, "cnn_lstm_best.h5")):
-    """Train CNN-LSTM model with callbacks"""
+    """Train CNN-LSTM model with proper callbacks"""
+    
     callbacks = [
-        EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True),
-        ModelCheckpoint(model_path, monitor='val_loss', save_best_only=True)
+        EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True, verbose=1),
+        ModelCheckpoint(model_path, monitor='val_loss', save_best_only=True, verbose=1)
     ]
+    
+    print(f"📊 Training CNN-LSTM on {X_train.shape[0]} sequences...")
     
     history = model.fit(
         X_train, y_train,
@@ -51,9 +60,10 @@ def train_cnn_lstm_model(model, X_train, y_train, X_val, y_val,
         batch_size=batch_size,
         callbacks=callbacks,
         verbose=1,
-        shuffle=False  # Important for time series
+        shuffle=False  # Important for time series data
     )
     
+    print(f"✅ Training completed. Best model saved to: {model_path}")
     return history, model_path
 
 def load_trained_model(path: str):
