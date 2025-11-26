@@ -1,16 +1,27 @@
-from .data_preprocessing import generate_synthetic_spe9, build_feature_table
+"""
+Reservoir AI Project - Main Package
+"""
+from .config import config
+from .data_loader import ReservoirDataLoader
+from .data_preprocessing import DataPreprocessor
+from .feature_engineer import ReservoirFeatureEngineer
 from .cnn_lstm_model import build_cnn_lstm, train_cnn_lstm_model
-from .svr_model import train_svr, evaluate_svr
-from .hyperparameter_tuning import tune_svr
-from .utils import ensure_dirs
+from .ensemble_model import ReservoirEnsembleModel
+from .evaluator import ModelEvaluator
+from .trainer import ModelTrainer
+from .utils import setup_logging, save_results
 
+__version__ = "1.0.0"
 __all__ = [
-    'generate_synthetic_spe9',
-    'build_feature_table', 
+    'config',
+    'ReservoirDataLoader', 
+    'DataPreprocessor',
+    'ReservoirFeatureEngineer',
     'build_cnn_lstm',
     'train_cnn_lstm_model',
-    'train_svr',
-    'evaluate_svr',
-    'tune_svr',
-    'ensure_dirs'
+    'ReservoirEnsembleModel',
+    'ModelEvaluator',
+    'ModelTrainer',
+    'setup_logging',
+    'save_results'
 ]
