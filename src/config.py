@@ -1,36 +1,53 @@
 """
-Configuration for Reservoir AI Project
+CONFIGURATION FOR MULTI-DATASET RESERVOIR AI
+RUTHLESSLY OPTIMIZED FOR PERFORMANCE
 """
 from pathlib import Path
-import os
+import numpy as np
 
 class Config:
-    """Central configuration management"""
-    
-    # Paths
+    # PATHS
     PROJECT_ROOT = Path(__file__).parent.parent
-    DATA_DIR = PROJECT_ROOT / "data"
-    PROCESSED_DIR = DATA_DIR / "processed"
-    MODEL_DIR = PROJECT_ROOT / "models"
-    RESULT_DIR = PROJECT_ROOT / "results"
+    DATA_RAW = PROJECT_ROOT / "data" / "raw"
+    DATA_PROCESSED = PROJECT_ROOT / "data" / "processed"
+    MODELS_DIR = PROJECT_ROOT / "models"
+    RESULTS_DIR = PROJECT_ROOT / "results"
     
-    # Data settings
-    RANDOM_STATE = 42
-    TEST_SIZE = 0.2
-    SEQUENCE_LENGTH = 10
-    N_WELLS = 26
-    TIME_STEPS = 200
+    # DATASET SPECS
+    DATASETS = {
+        'spe9': {
+            'wells': 10,
+            'grid_size': (24, 25, 15),
+            'time_steps': 100,
+            'years': 30
+        },
+        'norne': {
+            'wells': 30, 
+            'grid_size': (46, 112, 22),
+            'time_steps': 150,
+            'years': 25
+        },
+        'spe10': {
+            'wells': 25,
+            'grid_size': (60, 220, 85),
+            'time_steps': 80,
+            'years': 20
+        }
+    }
     
-    # Model parameters
+    # MODEL PARAMS
+    SEQUENCE_LENGTH = 30
     BATCH_SIZE = 32
     EPOCHS = 100
+    LEARNING_RATE = 0.001
+    RANDOM_STATE = 42
     
-    def __init__(self):
-        self._create_directories()
+    # FEATURE ENGINEERING
+    NUMERICAL_FEATURES = [
+        'BOTTOMHOLE_PRESSURE', 'FLOW_RATE_OIL', 'FLOW_RATE_WATER', 
+        'FLOW_RATE_GAS', 'CUMULATIVE_OIL', 'CUMULATIVE_WATER', 'CUMULATIVE_GAS'
+    ]
     
-    def _create_directories(self):
-        """Create necessary directories"""
-        for directory in [self.DATA_DIR, self.PROCESSED_DIR, self.MODEL_DIR, self.RESULT_DIR]:
-            directory.mkdir(parents=True, exist_ok=True)
-
+    CATEGORICAL_FEATURES = ['WELL_TYPE', 'WELL_GROUP']
+    
 config = Config()
