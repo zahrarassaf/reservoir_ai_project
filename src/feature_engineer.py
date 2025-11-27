@@ -1,10 +1,11 @@
 """
-INDUSTRY-GRADE FEATURE ENGINEERING FOR RESERVOIR FORECASTING
-PRODUCTION-READY FEATURE PIPELINE
+INDUSTRIAL-GRADE FEATURE ENGINEERING PIPELINE
+WITH TEMPORAL FEATURE EXTRACTION
 """
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from typing import Tuple, List
+from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.feature_selection import SelectKBest, f_regression
 import warnings
 warnings.filterwarnings('ignore')
@@ -12,77 +13,78 @@ warnings.filterwarnings('ignore')
 from .config import config
 
 class ReservoirFeatureEngineer:
-    """PRODUCTION-GRADE FEATURE ENGINEERING FOR RESERVOIR DATA"""
+    """PRODUCTION-READY FEATURE ENGINEERING"""
     
     def __init__(self):
-        self.scalers = {}
-        self.encoders = {}
+        self.scaler = RobustScaler()
         self.feature_selector = None
+        self.selected_features = []
+    
+    def create_temporal_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """CREATE ADVANCED TEMPORAL FEATURES"""
+        df = df.copy().sort_values(['well_id', 'timestamp'])
         
-    def create_advanced_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """CREATE ADVANCED RESERVOIR ENGINEERING FEATURES"""
-        print("🛠️ CREATING ADVANCED RESERVOIR FEATURES...")
+        feature_columns = []
         
-        df = df.copy()
-        
-        # TEMPORAL FEATURES
-        df['TIME_SIN'] = np.sin(2 * np.pi * df['YEARS'] / 10)
-        df['TIME_COS'] = np.cos(2 * np.pi * df['YEARS'] / 10)
-        
-        # RATE OF CHANGE FEATURES
-        df.sort_values(['WELL_ID', 'TIME_INDEX'], inplace=True)
-        
-        for well_id in df['WELL_ID'].unique():
-            well_mask = df['WELL_ID'] == well_id
+        for well_id in df['well_id'].unique():
+            well_mask = df['well_id'] == well_id
             well_data = df[well_mask]
             
-            # RATE DERIVATIVES
-            df.loc[well_mask, 'DP_DT'] = well_data['BOTTOMHOLE_PRESSURE'].diff() / well_data['TIME_INDEX'].diff()
-            df.loc[well_mask, 'DQ_OIL_DT'] = well_data['FLOW_RATE_OIL'].diff() / well_data['TIME_INDEX'].diff()
-            df.loc[well_mask, 'DQ_WATER_DT'] = well_data['FLOW_RATE_WATER'].diff() / well_data['TIME_INDEX'].diff()
+            # TEMPORAL DERIVATIVES
+            df.loc[well_mask, 'pressure_derivative'] = well_data['bottomhole_pressure'].diff()
+            df.loc[well_mask, 'oil_rate_derivative'] = well_data['oil_rate'].diff()
             
-            # MOVING AVERAGES
-            df.loc[well_mask, 'PRESSURE_MA_5'] = well_data['BOTTOMHOLE_PRESSURE'].rolling(5).mean()
-            df.loc[well_mask, 'OIL_RATE_MA_5'] = well_data['FLOW_RATE_OIL'].rolling(5).mean()
-            df.loc[well_mask, 'WATER_RATE_MA_5'] = well_data['FLOW_RATE_WATER'].rolling(5).mean()
+            # MOVING STATISTICS
+            for window in [7, 30, 90]:
+                df.loc[well_mask, f'pressure_ma_{window}'] = well_data['bottomhole_pressure'].rolling(window).mean()
+                df.loc[well_mask, f'oil_rate_ma_{window}'] = well_data['oil_rate'].rolling(window).mean()
+                df.loc[well_mask, f'water_rate_ma_{window}'] = well_data['water_rate'].rolling(window).mean()
             
-            # CUMULATIVE RATIOS
-            df.loc[well_mask, 'WCUT'] = well_data['FLOW_RATE_WATER'] / (well_data['FLOW_RATE_OIL'] + well_data['FLOW_RATE_WATER'] + 1e-8)
-            df.loc[well_mask, 'GOR'] = well_data['FLOW_RATE_GAS'] / (well_data['FLOW_RATE_OIL'] + 1e-8)
+            # VOLATILITY MEASURES
+            df.loc[well_mask, 'pressure_volatility'] = well_data['bottomhole_pressure'].rolling(30).std()
+            df.loc[well_mask, 'rate_volatility'] = well_data['oil_rate'].rolling(30).std()
             
-            # RECOVERY FACTOR ESTIMATES
-            df.loc[well_mask, 'RF_OIL'] = well_data['CUMULATIVE_OIL'] / (well_data['CUMULATIVE_OIL'].max() + 1e-8)
-            df.loc[well_mask, 'RF_WATER'] = well_data['CUMULATIVE_WATER'] / (well_data['CUMULATIVE_WATER'].max() + 1e-8)
+            # SEASONAL COMPONENTS
+            df.loc[well_mask, 'seasonal_pressure'] = self._extract_seasonal(well_data['bottomhole_pressure'])
+            df.loc[well_mask, 'seasonal_rate'] = self._extract_seasonal(well_data['oil_rate'])
         
-        # WELL INTERFERENCE FEATURES (SIMPLIFIED)
-        df['WELL_DENSITY'] = df.groupby('TIME_INDEX')['WELL_ID'].transform('count')
+        # FILL REMAINING NANS
+        df = df.fillna(method='bfill').fillna(method='ffill')
         
-        # FILL NaN VALUES FROM ROLLING CALCULATIONS
-        df.fillna(method='bfill', inplace=True)
-        df.fillna(method='ffill', inplace=True)
-        
-        print(f"✅ ADVANCED FEATURES CREATED: {df.shape}")
         return df
     
-    def create_sequences(self, df: pd.DataFrame, target_column: str = 'FLOW_RATE_OIL') -> tuple:
-        """CREATE TIME SEQUENCES FOR DEEP LEARNING MODELS"""
-        print("🔄 CREATING TIME SEQUENCES...")
+    def _extract_seasonal(self, series: pd.Series) -> pd.Series:
+        """EXTRACT SEASONAL COMPONENT FROM TIME SERIES"""
+        if len(series) < 30:
+            return np.zeros(len(series))
+        
+        # Simple seasonal extraction using rolling differences
+        seasonal = series.rolling(30).mean() - series.rolling(90).mean()
+        return seasonal.fillna(0)
+    
+    def create_sequences(self, df: pd.DataFrame, target_col: str = 'oil_rate') -> Tuple[np.ndarray, np.ndarray, List[str]]:
+        """CREATE TIME SEQUENCES FOR DEEP LEARNING"""
+        df_engineered = self.create_temporal_features(df)
+        
+        # SELECT FEATURE COLUMNS
+        exclude_cols = ['well_name', 'well_type', 'timestamp', 'years', 'time_index']
+        feature_cols = [col for col in df_engineered.columns 
+                       if col not in exclude_cols and col != target_col]
         
         sequences = []
         targets = []
-        well_groups = df.groupby('WELL_ID')
         
-        feature_columns = [col for col in df.columns if col not in [
-            'DATASET', 'WELL_NAME', 'WELL_TYPE', 'WELL_ID', 'TIME_INDEX', 'YEARS'
-        ]]
-        
-        for well_id, well_data in well_groups:
-            well_data = well_data.sort_values('TIME_INDEX')
-            values = well_data[feature_columns].values
+        for well_id in df_engineered['well_id'].unique():
+            well_data = df_engineered[df_engineered['well_id'] == well_id]
+            well_data = well_data.sort_values('timestamp')
             
+            values = well_data[feature_cols].values
+            target_vals = well_data[target_col].values
+            
+            # CREATE SEQUENCES
             for i in range(len(values) - config.SEQUENCE_LENGTH):
                 seq = values[i:(i + config.SEQUENCE_LENGTH)]
-                target = values[i + config.SEQUENCE_LENGTH][feature_columns.index(target_column)]
+                target = target_vals[i + config.SEQUENCE_LENGTH]
                 
                 sequences.append(seq)
                 targets.append(target)
@@ -90,15 +92,16 @@ class ReservoirFeatureEngineer:
         X = np.array(sequences)
         y = np.array(targets)
         
-        print(f"✅ SEQUENCES CREATED: X={X.shape}, y={y.shape}")
-        return X, y, feature_columns
+        print(f"✅ SEQUENCES CREATED: X{X.shape}, y{y.shape}")
+        return X, y, feature_cols
     
-    def prepare_features(self, df: pd.DataFrame) -> tuple:
+    def prepare_features(self, df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, List[str], pd.DataFrame]:
         """COMPLETE FEATURE PREPARATION PIPELINE"""
-        # CREATE ADVANCED FEATURES
-        df_engineered = self.create_advanced_features(df)
+        X, y, feature_names = self.create_sequences(df)
         
-        # CREATE SEQUENCES
-        X, y, feature_names = self.create_sequences(df_engineered)
+        # SCALE FEATURES
+        X_reshaped = X.reshape(-1, X.shape[-1])
+        X_scaled = self.scaler.fit_transform(X_reshaped)
+        X = X_scaled.reshape(X.shape)
         
-        return X, y, feature_names, df_engineered
+        return X, y, feature_names, df
