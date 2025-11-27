@@ -1,75 +1,58 @@
 """
-INDUSTRIAL-GRADE FEATURE ENGINEERING PIPELINE
-WITH TEMPORAL FEATURE EXTRACTION
+PRODUCTION FEATURE ENGINEERING PIPELINE
 """
 import numpy as np
 import pandas as pd
 from typing import Tuple, List
-from sklearn.preprocessing import StandardScaler, RobustScaler
-from sklearn.feature_selection import SelectKBest, f_regression
+from sklearn.preprocessing import StandardScaler
 import warnings
 warnings.filterwarnings('ignore')
 
 from .config import config
 
 class ReservoirFeatureEngineer:
-    """PRODUCTION-READY FEATURE ENGINEERING"""
+    """INDUSTRY-GRADE FEATURE ENGINEERING"""
     
     def __init__(self):
-        self.scaler = RobustScaler()
-        self.feature_selector = None
-        self.selected_features = []
+        self.scaler = StandardScaler()
+        self.feature_names = []
     
     def create_temporal_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """CREATE ADVANCED TEMPORAL FEATURES"""
         df = df.copy().sort_values(['well_id', 'timestamp'])
-        
-        feature_columns = []
         
         for well_id in df['well_id'].unique():
             well_mask = df['well_id'] == well_id
             well_data = df[well_mask]
             
             # TEMPORAL DERIVATIVES
-            df.loc[well_mask, 'pressure_derivative'] = well_data['bottomhole_pressure'].diff()
-            df.loc[well_mask, 'oil_rate_derivative'] = well_data['oil_rate'].diff()
+            df.loc[well_mask, 'pressure_derivative'] = well_data['bottomhole_pressure'].diff().fillna(0)
+            df.loc[well_mask, 'oil_rate_derivative'] = well_data['oil_rate'].diff().fillna(0)
             
-            # MOVING STATISTICS
-            for window in [7, 30, 90]:
-                df.loc[well_mask, f'pressure_ma_{window}'] = well_data['bottomhole_pressure'].rolling(window).mean()
-                df.loc[well_mask, f'oil_rate_ma_{window}'] = well_data['oil_rate'].rolling(window).mean()
-                df.loc[well_mask, f'water_rate_ma_{window}'] = well_data['water_rate'].rolling(window).mean()
+            # MOVING AVERAGES
+            for window in [7, 30]:
+                df.loc[well_mask, f'pressure_ma_{window}'] = well_data['bottomhole_pressure'].rolling(window, min_periods=1).mean()
+                df.loc[well_mask, f'oil_rate_ma_{window}'] = well_data['oil_rate'].rolling(window, min_periods=1).mean()
             
-            # VOLATILITY MEASURES
-            df.loc[well_mask, 'pressure_volatility'] = well_data['bottomhole_pressure'].rolling(30).std()
-            df.loc[well_mask, 'rate_volatility'] = well_data['oil_rate'].rolling(30).std()
-            
-            # SEASONAL COMPONENTS
-            df.loc[well_mask, 'seasonal_pressure'] = self._extract_seasonal(well_data['bottomhole_pressure'])
-            df.loc[well_mask, 'seasonal_rate'] = self._extract_seasonal(well_data['oil_rate'])
+            # CUMULATIVE FEATURES
+            df.loc[well_mask, 'cumulative_oil'] = well_data['oil_rate'].cumsum()
+            df.loc[well_mask, 'cumulative_water'] = well_data['water_rate'].cumsum()
         
-        # FILL REMAINING NANS
-        df = df.fillna(method='bfill').fillna(method='ffill')
+        # WELL INTERACTION FEATURES
+        df['well_density'] = df.groupby('time_index')['well_id'].transform('count')
         
-        return df
-    
-    def _extract_seasonal(self, series: pd.Series) -> pd.Series:
-        """EXTRACT SEASONAL COMPONENT FROM TIME SERIES"""
-        if len(series) < 30:
-            return np.zeros(len(series))
-        
-        # Simple seasonal extraction using rolling differences
-        seasonal = series.rolling(30).mean() - series.rolling(90).mean()
-        return seasonal.fillna(0)
+        return df.fillna(method='bfill').fillna(method='ffill')
     
     def create_sequences(self, df: pd.DataFrame, target_col: str = 'oil_rate') -> Tuple[np.ndarray, np.ndarray, List[str]]:
         """CREATE TIME SEQUENCES FOR DEEP LEARNING"""
         df_engineered = self.create_temporal_features(df)
         
         # SELECT FEATURE COLUMNS
-        exclude_cols = ['well_name', 'well_type', 'timestamp', 'years', 'time_index']
+        exclude_cols = ['well_name', 'well_type', 'timestamp', 'years', 'time_index', 'data_source']
         feature_cols = [col for col in df_engineered.columns 
                        if col not in exclude_cols and col != target_col]
+        
+        self.feature_names = feature_cols
         
         sequences = []
         targets = []
@@ -100,8 +83,9 @@ class ReservoirFeatureEngineer:
         X, y, feature_names = self.create_sequences(df)
         
         # SCALE FEATURES
-        X_reshaped = X.reshape(-1, X.shape[-1])
-        X_scaled = self.scaler.fit_transform(X_reshaped)
-        X = X_scaled.reshape(X.shape)
+        if len(X) > 0:
+            X_reshaped = X.reshape(-1, X.shape[-1])
+            X_scaled = self.scaler.fit_transform(X_reshaped)
+            X = X_scaled.reshape(X.shape)
         
         return X, y, feature_names, df
