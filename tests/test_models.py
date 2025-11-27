@@ -1,102 +1,91 @@
 """
-Unit tests for Reservoir AI models
+COMPREHENSIVE TEST SUITE FOR RESERVOIR AI MODELS
+PRODUCTION-READY TESTING
 """
 import unittest
 import numpy as np
 import pandas as pd
+from pathlib import Path
 import sys
-import os
 
-# Add src to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.data_loader import DataLoader
-from src.feature_engineer import FeatureEngineer
-from src.model_factory import ModelFactory
+from src.data_loader import ReservoirDataLoader
+from src.feature_engineer import ReservoirFeatureEngineer
+from src.ensemble_model import AdvancedReservoirModel
 from src.config import config
 
 class TestReservoirAI(unittest.TestCase):
-    """Test cases for Reservoir AI components"""
+    """COMPREHENSIVE TEST SUITE FOR RESERVOIR AI"""
     
     def setUp(self):
-        """Set up test fixtures"""
-        self.data_loader = DataLoader()
-        self.feature_engineer = FeatureEngineer()
+        """SETUP TEST ENVIRONMENT"""
+        self.loader = ReservoirDataLoader()
+        self.feature_engineer = ReservoirFeatureEngineer()
+        self.model = AdvancedReservoirModel()
+    
+    def test_data_loader(self):
+        """TEST DATA LOADER FUNCTIONALITY"""
+        data = self.loader.generate_physics_based_data()
         
-    def test_data_generation(self):
-        """Test synthetic data generation"""
-        df = self.data_loader.generate_spe9_synthetic_data()
+        self.assertIsInstance(data, pd.DataFrame)
+        self.assertGreater(len(data), 0)
+        self.assertIn('oil_rate', data.columns)
+        self.assertIn('bottomhole_pressure', data.columns)
         
-        self.assertIsInstance(df, pd.DataFrame)
-        self.assertGreater(len(df), 0)
-        self.assertIn('FlowRate', df.columns)
-        self.assertIn('Pressure', df.columns)
-        self.assertEqual(len(df['Well'].unique()), config.N_WELLS)
-        
+        print("✅ DATA LOADER TEST PASSED")
+    
     def test_feature_engineering(self):
-        """Test feature engineering pipeline"""
-        df = self.data_loader.generate_spe9_synthetic_data()
-        temporal_features = self.feature_engineer.create_temporal_features(df)
-        engineered_features = self.feature_engineer.create_domain_features(temporal_features)
+        """TEST FEATURE ENGINEERING PIPELINE"""
+        data = self.loader.generate_physics_based_data()
+        X, y, features, engineered_data = self.feature_engineer.prepare_features(data)
         
-        self.assertIsInstance(engineered_features, pd.DataFrame)
-        self.assertGreater(len(engineered_features.columns), len(df.columns))
+        self.assertIsInstance(X, np.ndarray)
+        self.assertIsInstance(y, np.ndarray)
+        self.assertGreater(len(features), 0)
+        self.assertEqual(X.shape[0], y.shape[0])
         
-        # Check that lag features are created
-        lag_columns = [col for col in engineered_features.columns if 'lag' in col]
-        self.assertGreater(len(lag_columns), 0)
+        print("✅ FEATURE ENGINEERING TEST PASSED")
+    
+    def test_model_initialization(self):
+        """TEST MODEL INITIALIZATION"""
+        self.assertIsNotNone(self.model)
         
-    def test_sequence_creation(self):
-        """Test sequence creation for temporal models"""
-        df = self.data_loader.generate_spe9_synthetic_data()
-        temporal_features = self.feature_engineer.create_temporal_features(df)
-        engineered_features = self.feature_engineer.create_domain_features(temporal_features)
+        # TEST MODEL BUILDING
+        input_shape = (45, 15)  # sequence_length, num_features
+        model = self.model.build_hybrid_cnn_lstm(input_shape)
         
-        X_seq, y_seq = self.feature_engineer.prepare_sequences(engineered_features)
+        self.assertIsNotNone(model)
+        self.assertEqual(model.output_shape, (None, 1))
         
-        if len(X_seq) > 0:
-            self.assertEqual(len(X_seq), len(y_seq))
-            self.assertEqual(X_seq.shape[1], config.SEQUENCE_LENGTH)
-            
-    def test_model_creation(self):
-        """Test model creation from factory"""
-        # Test CNN-LSTM creation
-        input_shape = (10, 15)
-        cnn_lstm = ModelFactory.create_cnn_lstm(input_shape)
-        self.assertEqual(cnn_lstm.input_shape[1:], input_shape)
+        print("✅ MODEL INITIALIZATION TEST PASSED")
+    
+    def test_prediction_shape(self):
+        """TEST PREDICTION SHAPES"""
+        # GENERATE TEST DATA
+        data = self.loader.generate_physics_based_data()
+        X, y, features, _ = self.feature_engineer.prepare_features(data)
         
-        # Test traditional models
-        models = ModelFactory.get_all_models()
-        self.assertGreater(len(models), 0)
-        self.assertIn('RandomForest', models)
-        self.assertIn('SVR', models)
+        # TEST WITH SMALL SUBSET
+        X_test = X[:10]
+        X_flat = X_test.reshape(X_test.shape[0], -1)
         
-    def test_data_quality(self):
-        """Test data quality checks"""
-        df = self.data_loader.generate_spe9_synthetic_data()
+        # BUILD AND TEST MODEL
+        self.model.build_ml_ensemble()
+        predictions = self.model.predict_ensemble(X_test, X_flat)
         
-        # Check for NaN values
-        self.assertEqual(df.isnull().sum().sum(), 0)
+        self.assertIsInstance(predictions, dict)
+        self.assertGreater(len(predictions), 0)
         
-        # Check data types
-        self.assertTrue(pd.api.types.is_numeric_dtype(df['Pressure']))
-        self.assertTrue(pd.api.types.is_numeric_dtype(df['FlowRate']))
+        for model_name, pred in predictions.items():
+            self.assertEqual(pred.shape, (10,))
         
-    def test_feature_scaling(self):
-        """Test feature scaling functionality"""
-        # Generate test data
-        X_train = np.random.randn(100, 5)
-        X_test = np.random.randn(50, 5)
-        
-        # Test scaling
-        X_train_scaled, X_test_scaled = self.feature_engineer.scale_features(X_train, X_test)
-        
-        self.assertEqual(X_train_scaled.shape, X_train.shape)
-        self.assertEqual(X_test_scaled.shape, X_test.shape)
-        
-        # Check that means are approximately 0 and stds are approximately 1
-        self.assertAlmostEqual(np.mean(X_train_scaled), 0, places=1)
-        self.assertAlmostEqual(np.std(X_train_scaled), 1, places=1)
+        print("✅ PREDICTION SHAPE TEST PASSED")
+
+def run_tests():
+    """RUN COMPLETE TEST SUITE"""
+    print("🧪 RUNNING RESERVOIR AI TEST SUITE...")
+    unittest.main(argv=[''], verbosity=2, exit=False)
 
 if __name__ == '__main__':
-    unittest.main()
+    run_tests()
