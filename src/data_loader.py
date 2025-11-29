@@ -1,134 +1,151 @@
-"""
-AUTO-DOWNLOAD RESERVOIR DATA LOADER
-WITH FALLBACK TO PHYSICS-BASED SYNTHETIC DATA
-"""
-import numpy as np
 import pandas as pd
-import requests
-from pathlib import Path
+import numpy as np
+from sklearn.preprocessing import RobustScaler
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.feature_selection import mutual_info_regression
 import warnings
 warnings.filterwarnings('ignore')
 
-from .config import config
-
 class ReservoirDataLoader:
-    """PRODUCTION DATA LOADER WITH AUTO-DOWNLOAD CAPABILITY"""
-    
-    def __init__(self, dataset_name: str = 'spe9'):
-        self.dataset_name = dataset_name
-        self.specs = config.DATASET_SPECS[dataset_name]
-        self.data = None
+    def __init__(self, config):
+        self.config = config
+        self.feature_scaler = RobustScaler()
+        self.target_scaler = RobustScaler()
         
-    def download_opm_data(self) -> bool:
-        """ATTEMPT TO DOWNLOAD REAL OPM DATA"""
+    def load_and_validate_data(self, data_path=None):
+        """Load and rigorously validate reservoir data"""
         try:
-            spe9_url = "https://raw.githubusercontent.com/OPM/opm-data/master/spe9/SPE9.DATA"
-            response = requests.get(spe9_url)
-            
-            if response.status_code == 200:
-                opm_path = config.DATA_RAW / "SPE9.DATA"
-                with open(opm_path, 'w') as f:
-                    f.write(response.text)
-                print("✅ REAL OPM DATA DOWNLOADED SUCCESSFULLY!")
-                return True
+            if data_path:
+                df = pd.read_csv(data_path)
             else:
-                print("⚠️  OPM data not accessible, using synthetic data")
-                return False
-                
-        except Exception as e:
-            print(f"⚠️  Download failed: {e}, using synthetic data")
-            return False
-    
-    def generate_physics_based_data(self) -> pd.DataFrame:
-        """GENERATE INDUSTRY-STANDARD SYNTHETIC DATA"""
-        np.random.seed(config.RANDOM_STATE)
-        
-        n_wells = self.specs['wells']
-        n_timesteps = self.specs['time_steps']
-        n_producers = int(n_wells * self.specs['producer_ratio'])
-        
-        time_days = np.linspace(0, self.specs['simulation_years'] * 365, n_timesteps)
-        reservoir_data = []
-        
-        for well_idx in range(n_wells):
-            is_producer = well_idx < n_producers
+                df = self._generate_synthetic_data()
             
-            for time_idx, days in enumerate(time_days):
-                years = days / 365
-                
-                # RESERVOIR PHYSICS CALCULATIONS
-                if is_producer:
-                    base_rate = self.specs['initial_oil_rate'] * np.exp(-0.15 * years)
-                    seasonal = 0.1 * np.sin(2 * np.pi * years)
-                    oil_rate = max(50, base_rate * (1 + seasonal) + np.random.normal(0, 80))
-                    
-                    water_cut = 0.08 + 0.01 * years
-                    water_rate = oil_rate * water_cut
-                    gas_rate = oil_rate * (800 + 30 * years) / 1000
-                    
-                    pressure = self.specs['initial_pressure'] - 200 * (1 - np.exp(-0.3 * years))
-                else:
-                    oil_rate = 0
-                    base_injection = 7500
-                    injection_var = 0.15 * np.sin(2 * np.pi * years / 2)
-                    water_rate = base_injection * (1 + injection_var)
-                    gas_rate = 0
-                    pressure = self.specs['initial_pressure'] + 500 + 150 * np.cos(2 * np.pi * years / 3)
-                
-                # ADD REALISTIC NOISE
-                oil_rate = max(0, oil_rate + np.random.normal(0, oil_rate * 0.08))
-                water_rate = max(0, water_rate + np.random.normal(0, water_rate * 0.06))
-                pressure = max(100, pressure + np.random.normal(0, 25))
-                
-                record = {
-                    'timestamp': days,
-                    'years': years,
-                    'time_index': time_idx,
-                    'well_id': well_idx,
-                    'well_name': f"{'PROD' if is_producer else 'INJ'}_{well_idx:03d}",
-                    'well_type': 'PRODUCER' if is_producer else 'INJECTOR',
-                    'bottomhole_pressure': pressure,
-                    'oil_rate': oil_rate,
-                    'water_rate': water_rate,
-                    'gas_rate': gas_rate,
-                    'permeability': np.random.lognormal(5.0, 0.3),
-                    'porosity': np.random.beta(2, 5) * 0.2 + 0.06,
-                    'data_source': 'PHYSICS_BASED_SYNTHETIC'
-                }
-                
-                reservoir_data.append(record)
-        
-        df = pd.DataFrame(reservoir_data)
-        
-        # ADD ENGINEERING FEATURES
-        df['productivity_index'] = df['oil_rate'] / (df['bottomhole_pressure'] + 1e-8)
-        df['water_cut'] = df['water_rate'] / (df['oil_rate'] + df['water_rate'] + 1e-8)
-        
-        # SAVE DATA
-        output_path = config.DATA_PROCESSED / f"{self.dataset_name}_data.csv"
-        df.to_csv(output_path, index=False)
-        
-        print(f"✅ {self.dataset_name.upper()} DATA GENERATED: {df.shape}")
-        return df
+            print("🔍 DATA VALIDATION REPORT")
+            print("=========================")
+            print(f"📊 Dataset shape: {df.shape}")
+            print(f"🎯 Target variable: oil_rate")
+            
+            # Data quality checks
+            self._perform_data_quality_checks(df)
+            
+            # Validate temporal structure
+            self._validate_temporal_structure(df)
+            
+            return df
+            
+        except Exception as e:
+            print(f"❌ Data loading failed: {str(e)}")
+            raise
     
-    def load_data(self) -> pd.DataFrame:
-        """MAIN DATA LOADING METHOD"""
-        # TRY TO DOWNLOAD REAL DATA FIRST
-        real_data_available = self.download_opm_data()
+    def _generate_synthetic_data(self):
+        """Generate realistic synthetic reservoir data for testing"""
+        np.random.seed(self.config.RANDOM_STATE)
+        n_samples = 24000
+        n_wells = 24
+        time_steps = 1000
         
-        if real_data_available:
-            print("🔄 Processing real OPM data...")
-            # In future: Add real OPM data parsing here
-            # For now, fall back to synthetic
-            pass
+        data = []
+        for well in range(n_wells):
+            base_pressure = np.random.uniform(2000, 5000)
+            base_rate = np.random.uniform(100, 2000)
+            
+            for t in range(time_steps):
+                # Realistic reservoir features
+                pressure = base_pressure - t * 0.1 + np.random.normal(0, 50)
+                water_cut = np.clip(0.1 + t * 0.0001 + np.random.normal(0, 0.02), 0, 0.9)
+                gas_oil_ratio = np.random.lognormal(6, 0.5)
+                
+                # Realistic oil rate (target)
+                trend = base_rate * np.exp(-t * 0.0005)
+                seasonal = 100 * np.sin(2 * np.pi * t / 365)
+                noise = np.random.normal(0, 50)
+                oil_rate = np.clip(trend + seasonal + noise, 0, None)
+                
+                row = {
+                    'well_id': f'well_{well:02d}',
+                    'time_step': t,
+                    'pressure': pressure,
+                    'water_cut': water_cut,
+                    'gas_oil_ratio': gas_oil_ratio,
+                    'injection_rate': np.random.uniform(0, 1000),
+                    'bottomhole_flowing_pressure': pressure - np.random.uniform(100, 500),
+                    'wellhead_pressure': pressure - np.random.uniform(500, 1000),
+                    'temperature': np.random.uniform(80, 120),
+                    'choke_size': np.random.uniform(10, 100),
+                    'gas_lift_rate': np.random.uniform(0, 500),
+                    'water_injection_pressure': np.random.uniform(1000, 3000),
+                    'productivity_index': oil_rate / max(1, pressure - 1500),
+                    'reservoir_thickness': np.random.uniform(50, 200),
+                    'permeability': np.random.lognormal(3, 0.5),
+                    'oil_rate': oil_rate
+                }
+                data.append(row)
         
-        data_path = config.DATA_PROCESSED / f"{self.dataset_name}_data.csv"
+        return pd.DataFrame(data)
+    
+    def _perform_data_quality_checks(self, df):
+        """Comprehensive data quality assessment"""
+        print("\n📋 DATA QUALITY CHECKS:")
+        print(f"   Missing values: {df.isnull().sum().sum()}")
+        print(f"   Duplicate rows: {df.duplicated().sum()}")
+        print(f"   Zero variance features: {len(df.columns[df.nunique() == 1])}")
         
-        if data_path.exists():
-            self.data = pd.read_csv(data_path)
-            print(f"📁 LOADED EXISTING DATA: {self.data.shape}")
-        else:
-            print("🔄 GENERATING NEW SYNTHETIC DATA...")
-            self.data = self.generate_physics_based_data()
+        # Statistical summary
+        print(f"   Target stats - Mean: {df['oil_rate'].mean():.2f}, Std: {df['oil_rate'].std():.2f}")
+        print(f"   Skewness: {df['oil_rate'].skew():.2f}")
+    
+    def _validate_temporal_structure(self, df):
+        """Validate time series structure"""
+        if 'time_step' in df.columns:
+            time_gaps = df['time_step'].diff().value_counts()
+            print(f"   Temporal gaps: {dict(time_gaps.head())}")
+    
+    def create_sequences(self, df, target_col='oil_rate'):
+        """Create time series sequences with proper validation"""
+        feature_cols = [col for col in df.columns if col not in ['well_id', 'time_step', target_col]]
         
-        return self.data
+        print(f"\n🎯 SEQUENCE CREATION:")
+        print(f"   Features: {len(feature_cols)}")
+        print(f"   Sequence length: {self.config.SEQUENCE_LENGTH}")
+        
+        X, y = [], []
+        
+        # Group by well for realistic time series
+        for well_id, well_data in df.groupby('well_id'):
+            well_data = well_data.sort_values('time_step')
+            features = well_data[feature_cols].values
+            targets = well_data[target_col].values
+            
+            for i in range(len(well_data) - self.config.SEQUENCE_LENGTH):
+                X.append(features[i:(i + self.config.SEQUENCE_LENGTH)])
+                y.append(targets[i + self.config.SEQUENCE_LENGTH])
+        
+        X = np.array(X)
+        y = np.array(y)
+        
+        print(f"   Final sequences: X{X.shape}, y{y.shape}")
+        return X, y, feature_cols
+    
+    def scale_features(self, X_train, X_test, y_train, y_test):
+        """Robust feature scaling"""
+        # Reshape for scaling
+        X_train_flat = X_train.reshape(-1, X_train.shape[-1])
+        X_test_flat = X_test.reshape(-1, X_test.shape[-1])
+        
+        # Scale features
+        X_train_scaled = self.feature_scaler.fit_transform(X_train_flat)
+        X_test_scaled = self.feature_scaler.transform(X_test_flat)
+        
+        # Scale target
+        y_train_scaled = self.target_scaler.fit_transform(y_train.reshape(-1, 1)).flatten()
+        y_test_scaled = self.target_scaler.transform(y_test.reshape(-1, 1)).flatten()
+        
+        # Reshape back
+        X_train_scaled = X_train_scaled.reshape(X_train.shape)
+        X_test_scaled = X_test_scaled.reshape(X_test.shape)
+        
+        return X_train_scaled, X_test_scaled, y_train_scaled, y_test_scaled
+    
+    def inverse_scale_target(self, y_scaled):
+        """Inverse transform target variable"""
+        return self.target_scaler.inverse_transform(y_scaled.reshape(-1, 1)).flatten()
