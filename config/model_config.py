@@ -4,14 +4,13 @@ import torch
 
 @dataclass
 class SPE9GridConfig:
-    """SPE9 grid configuration"""
     nx: int = 24
     ny: int = 25  
     nz: int = 15
     total_blocks: int = 9000
-    dx: float = 300.0  # ft
-    dy: float = 300.0  # ft
-    dz: List[float] = None  # Layer thicknesses
+    dx: float = 300.0
+    dy: float = 300.0
+    dz: List[float] = None
     
     def __post_init__(self):
         if self.dz is None:
@@ -19,11 +18,10 @@ class SPE9GridConfig:
 
 @dataclass
 class ReservoirProperties:
-    """SPE9 reservoir properties"""
-    initial_pressure: float = 3600.0  # psi
-    datum_depth: float = 9035.0  # ft
-    water_oil_contact: float = 9950.0  # ft
-    gas_oil_contact: float = 8800.0  # ft
+    initial_pressure: float = 3600.0
+    datum_depth: float = 9035.0
+    water_oil_contact: float = 9950.0
+    gas_oil_contact: float = 8800.0
     porosity_layers: List[float] = None
     rock_compressibility: float = 4e-6
     
@@ -36,20 +34,14 @@ class ReservoirProperties:
 
 @dataclass
 class EnsembleModelConfig:
-    """Advanced ensemble model configuration"""
-    # Model architecture
     input_features: List[str] = None
     output_features: List[str] = None
     hidden_layers: List[int] = None
     dropout_rate: float = 0.2
     activation: str = "gelu"
-    
-    # Ensemble settings
     n_models: int = 5
     diversity_regularization: float = 0.1
     uncertainty_calibration: bool = True
-    
-    # Training
     learning_rate: float = 1e-4
     weight_decay: float = 1e-5
     patience: int = 20
