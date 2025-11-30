@@ -1,140 +1,179 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from typing import Dict, List, Tuple, Optional
 import numpy as np
-import pandas as pd
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-import tensorflow as tf
-import warnings
-warnings.filterwarnings('ignore')
+from pathlib import Path
+import json
 
 class AdvancedEnsembleTrainer:
-    def __init__(self, config, model_factory):
+    """Advanced trainer for ensemble models"""
+    
+    def __init__(self, model: nn.Module, config: EnsembleModelConfig):
+        self.model = model
         self.config = config
-        self.model_factory = model_factory
-        self.models = {}
-        self.histories = {}
+        self.optimizers = []
+        self.schedulers = []
         
-    def train_ensemble(self, X_train, X_test, y_train, y_test, feature_names):
-        """Train sophisticated ensemble with cross-validation"""
-        print("\n🤖 ADVANCED ENSEMBLE TRAINING")
-        print("=============================")
+        # Create optimizers for each model in ensemble
+        for i, model in enumerate(self.model.models):
+            optimizer = optim.AdamW(
+                model.parameters(),
+                lr=config.learning_rate,
+                weight_decay=config.weight_decay
+            )
+            self.optimizers.append(optimizer)
+            
+            scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='min', patience=config.patience // 2, factor=0.5
+            )
+            self.schedulers.append(scheduler)
+            
+    def train_ensemble(self, features: Dict[str, torch.Tensor], 
+                      epochs: int, batch_size: int) -> Dict[str, List[float]]:
+        """Train the ensemble model"""
+        print("🎯 Starting ensemble training...")
         
-        # Reshape for tree-based models
-        X_train_flat = X_train.reshape(X_train.shape[0], -1)
-        X_test_flat = X_test.reshape(X_test.shape[0], -1)
+        # Prepare data
+        train_loader = self._prepare_data_loader(features, batch_size)
         
-        # Train individual models with cross-validation
-        self._train_tree_models(X_train_flat, X_test_flat, y_train, y_test)
-        self._train_deep_learning_models(X_train, X_test, y_train, y_test)
+        training_history = {
+            'train_loss': [],
+            'val_loss': [],
+            'diversity_loss': []
+        }
         
-        # Create weighted ensemble
-        ensemble_predictions = self._create_weighted_ensemble(X_test, X_test_flat)
+        best_val_loss = float('inf')
+        patience_counter = 0
         
-        return ensemble_predictions
+        for epoch in range(epochs):
+            # Training phase
+            train_loss, diversity_loss = self._train_epoch(train_loader)
+            
+            # Validation phase
+            val_loss = self._validate_epoch(train_loader)  # Using same data for simplicity
+            
+            # Update learning rates
+            for scheduler in self.schedulers:
+                scheduler.step(val_loss)
+            
+            # Record history
+            training_history['train_loss'].append(train_loss)
+            training_history['val_loss'].append(val_loss)
+            training_history['diversity_loss'].append(diversity_loss)
+            
+            # Early stopping
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                patience_counter = 0
+                # Save best model
+                self._save_checkpoint(epoch, val_loss)
+            else:
+                patience_counter += 1
+                
+            if patience_counter >= self.config.patience:
+                print(f"🛑 Early stopping at epoch {epoch}")
+                break
+            
+            if epoch % 100 == 0:
+                print(f"📊 Epoch {epoch}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}")
+        
+        return training_history
     
-    def _train_tree_models(self, X_train_flat, X_test_flat, y_train, y_test):
-        """Train tree-based models with cross-validation"""
-        print("\n🌲 TRAINING TREE-BASED MODELS")
+    def _train_epoch(self, data_loader) -> Tuple[float, float]:
+        """Train for one epoch"""
+        self.model.train()
+        total_loss = 0.0
+        total_diversity = 0.0
+        num_batches = 0
         
-        # Random Forest
-        print("🔄 Training Random Forest...")
-        rf_model = self.model_factory.create_random_forest()
-        rf_model.fit(X_train_flat, y_train)
-        self.models['random_forest'] = rf_model
+        for batch_idx, (x, y) in enumerate(data_loader):
+            batch_loss = 0.0
+            
+            # Train each model in ensemble
+            for i, (model, optimizer) in enumerate(zip(self.model.models, self.optimizers)):
+                optimizer.zero_grad()
+                
+                # Forward pass
+                pred = model(x)
+                
+                # Calculate loss
+                loss = nn.MSELoss()(pred, y)
+                
+                # Add diversity regularization
+                if self.config.diversity_regularization > 0:
+                    diversity_loss = self.model.ensemble_diversity_loss(x)
+                    loss += self.config.diversity_regularization * diversity_loss
+                    total_diversity += diversity_loss.item()
+                
+                # Backward pass
+                loss.backward()
+                optimizer.step()
+                
+                batch_loss += loss.item()
+            
+            total_loss += batch_loss / len(self.model.models)
+            num_batches += 1
         
-        # XGBoost
-        print("🔄 Training XGBoost...")
-        xgb_model = self.model_factory.create_xgboost()
-        xgb_model.fit(X_train_flat, y_train)
-        self.models['xgboost'] = xgb_model
-        
-        # LightGBM
-        print("🔄 Training LightGBM...")
-        lgb_model = self.model_factory.create_lightgbm()
-        lgb_model.fit(X_train_flat, y_train)
-        self.models['lightgbm'] = lgb_model
+        return total_loss / num_batches, total_diversity / num_batches
     
-    def _train_deep_learning_models(self, X_train, X_test, y_train, y_test):
-        """Train deep learning models with proper validation"""
-        print("\n🧠 TRAINING DEEP LEARNING MODELS")
+    def _validate_epoch(self, data_loader) -> float:
+        """Validate for one epoch"""
+        self.model.eval()
+        total_loss = 0.0
+        num_batches = 0
         
-        # CNN-LSTM
-        print("🔄 Training CNN-LSTM...")
-        cnn_lstm_model = self.model_factory.create_cnn_lstm_model(X_train.shape[1:])
+        with torch.no_grad():
+            for x, y in data_loader:
+                # Get ensemble prediction
+                mean_pred, _ = self.model(x)
+                loss = nn.MSELoss()(mean_pred, y)
+                total_loss += loss.item()
+                num_batches += 1
         
-        history = cnn_lstm_model.fit(
-            X_train, y_train,
-            batch_size=self.config.BATCH_SIZE,
-            epochs=self.config.EPOCHS,
-            validation_data=(X_test, y_test),
-            callbacks=self.model_factory.get_callbacks('cnn_lstm'),
-            verbose=1,
-            shuffle=False  # Important for time series
+        return total_loss / num_batches
+    
+    def _prepare_data_loader(self, features: Dict[str, torch.Tensor], batch_size: int):
+        """Prepare data loader for training"""
+        # Extract features and targets
+        static_features = features['static_features']
+        dynamic_features = features['production_data']['FOPR']  # Using FOPR as target for simplicity
+        
+        # Create dataset (simplified - in practice you'd have proper targets)
+        # For demonstration, using static features to predict FOPR
+        x_data = static_features
+        y_data = dynamic_features.unsqueeze(1).expand(-1, x_data.size(1))  # Match dimensions
+        
+        dataset = torch.utils.data.TensorDataset(x_data, y_data)
+        data_loader = torch.utils.data.DataLoader(
+            dataset, batch_size=batch_size, shuffle=True
         )
         
-        self.models['cnn_lstm'] = cnn_lstm_model
-        self.histories['cnn_lstm'] = history
-        
-        # Optional: Train Transformer model
-        if X_train.shape[1] >= 10:  # Only if sufficient sequence length
-            try:
-                print("🔄 Training Transformer...")
-                transformer_model = self.model_factory.create_transformer_model(X_train.shape[1:])
-                
-                transformer_history = transformer_model.fit(
-                    X_train, y_train,
-                    batch_size=self.config.BATCH_SIZE,
-                    epochs=50,
-                    validation_data=(X_test, y_test),
-                    verbose=0
-                )
-                
-                self.models['transformer'] = transformer_model
-                self.histories['transformer'] = transformer_history
-                
-            except Exception as e:
-                print(f"⚠️  Transformer training skipped: {str(e)}")
+        return data_loader
     
-    def _create_weighted_ensemble(self, X_test_seq, X_test_flat):
-        """Create sophisticated weighted ensemble"""
-        print("\n⚖️  CREATING WEIGHTED ENSEMBLE")
+    def _save_checkpoint(self, epoch: int, val_loss: float):
+        """Save model checkpoint"""
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dicts': [opt.state_dict() for opt in self.optimizers],
+            'val_loss': val_loss,
+            'config': self.config
+        }
         
-        predictions = {}
-        
-        # Get predictions from all models
-        for name, model in self.models.items():
-            if name in ['cnn_lstm', 'transformer']:
-                predictions[name] = model.predict(X_test_seq, verbose=0).flatten()
-            else:
-                predictions[name] = model.predict(X_test_flat)
-        
-        # Calculate dynamic weights based on validation performance
-        weights = self._calculate_dynamic_weights(predictions)
-        
-        # Create weighted ensemble
-        ensemble_pred = np.zeros_like(predictions['cnn_lstm'])
-        for name, pred in predictions.items():
-            ensemble_pred += weights[name] * pred
-        
-        print("📊 Ensemble weights:")
-        for name, weight in weights.items():
-            print(f"   {name}: {weight:.3f}")
-        
-        return ensemble_pred, predictions
+        Path("checkpoints").mkdir(exist_ok=True)
+        torch.save(checkpoint, f"checkpoints/best_model_epoch_{epoch}.pth")
     
-    def _calculate_dynamic_weights(self, predictions):
-        """Calculate ensemble weights based on model performance"""
-        # For now, use configured weights
-        # In production, calculate based on validation performance
-        return self.config.ENSEMBLE_WEIGHTS
-    
-    def predict_individual_models(self, X_seq, X_flat):
-        """Get predictions from all individual models"""
-        predictions = {}
+    def save_results(self, output_dir: str, results: Dict[str, List[float]]):
+        """Save training results"""
+        output_path = Path(output_dir)
+        output_path.mkdir(exist_ok=True)
         
-        for name, model in self.models.items():
-            if name in ['cnn_lstm', 'transformer']:
-                predictions[name] = model.predict(X_seq, verbose=0).flatten()
-            else:
-                predictions[name] = model.predict(X_flat)
+        # Save training history
+        with open(output_path / "training_history.json", "w") as f:
+            json.dump({k: [float(x) for x in v] for k, v in results.items()}, f, indent=2)
         
-        return predictions
+        # Save model
+        torch.save(self.model.state_dict(), output_path / "final_model.pth")
+        
+        print(f"💾 Results saved to {output_dir}")
