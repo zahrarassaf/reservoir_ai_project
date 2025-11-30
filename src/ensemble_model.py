@@ -1,152 +1,125 @@
-"""
-ENSEMBLE MODEL IMPLEMENTATION
-"""
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import List, Dict, Optional, Tuple
 import numpy as np
-import pandas as pd
-from typing import Dict, Tuple
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout, BatchNormalization, Conv1D, MaxPooling1D
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
-from sklearn.ensemble import RandomForestRegressor
-import joblib
 
-from .config import config
+class ResidualBlock(nn.Module):
+    """Residual block for deep learning"""
+    
+    def __init__(self, features: int, dropout: float = 0.2):
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(features, features),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(features, features),
+            nn.Dropout(dropout)
+        )
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x + self.layers(x)
 
-class AdvancedReservoirModel:
-    """PRODUCTION-READY ENSEMBLE MODEL"""
+class ReservoirNet(nn.Module):
+    """Specialized neural network for reservoir prediction"""
     
-    def __init__(self):
-        self.cnn_lstm_model = None
-        self.ensemble_models = {}
-        self.is_trained = False
+    def __init__(self, input_dim: int, output_dim: int, hidden_dims: List[int], dropout: float = 0.2):
+        super().__init__()
+        
+        layers = []
+        prev_dim = input_dim
+        
+        # Input layers
+        for hidden_dim in hidden_dims:
+            layers.extend([
+                nn.Linear(prev_dim, hidden_dim),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                ResidualBlock(hidden_dim, dropout)
+            ])
+            prev_dim = hidden_dim
+            
+        # Output layer
+        layers.append(nn.Linear(prev_dim, output_dim))
+        
+        self.network = nn.Sequential(*layers)
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.network(x)
+
+class DeepEnsembleModel(nn.Module):
+    """Deep ensemble model for prediction and uncertainty quantification"""
     
-    def build_cnn_lstm(self, input_shape: Tuple) -> Sequential:
-        """BUILD CNN-LSTM MODEL"""
-        model = Sequential([
-            Conv1D(64, 3, activation='relu', input_shape=input_shape, padding='same'),
-            BatchNormalization(),
-            MaxPooling1D(2),
-            Dropout(0.2),
-            
-            Conv1D(128, 3, activation='relu', padding='same'),
-            BatchNormalization(),
-            MaxPooling1D(2),
-            Dropout(0.2),
-            
-            LSTM(128, return_sequences=True, dropout=0.2),
-            LSTM(64, dropout=0.2),
-            
-            Dense(64, activation='relu'),
-            Dropout(0.3),
-            Dense(32, activation='relu'),
-            Dense(1)
+    def __init__(self, config: EnsembleModelConfig):
+        super().__init__()
+        self.config = config
+        self.models = nn.ModuleList([
+            ReservoirNet(
+                input_dim=len(config.input_features),
+                output_dim=len(config.output_features),
+                hidden_dims=config.hidden_layers,
+                dropout=config.dropout_rate
+            ) for _ in range(config.n_models)
         ])
         
-        model.compile(
-            optimizer=Adam(learning_rate=config.LEARNING_RATE),
-            loss='mse',
-            metrics=['mae']
-        )
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Prediction with uncertainty quantification"""
+        predictions = []
         
-        return model
-    
-    def build_ml_ensemble(self):
-        """BUILD MACHINE LEARNING ENSEMBLE"""
-        self.ensemble_models = {
-            'random_forest': RandomForestRegressor(
-                n_estimators=100,
-                random_state=config.RANDOM_STATE,
-                n_jobs=-1,
-                max_depth=10
-            )
-        }
-        
-        # OPTIONAL MODELS WITH FALLBACK
-        try:
-            from xgboost import XGBRegressor
-            self.ensemble_models['xgboost'] = XGBRegressor(
-                n_estimators=100,
-                random_state=config.RANDOM_STATE,
-                n_jobs=-1
-            )
-        except ImportError:
-            print("⚠️  XGBoost not available")
+        for model in self.models:
+            pred = model(x)
+            predictions.append(pred)
             
-        try:
-            from lightgbm import LGBMRegressor
-            self.ensemble_models['lightgbm'] = LGBMRegressor(
-                n_estimators=100,
-                random_state=config.RANDOM_STATE,
-                n_jobs=-1
-            )
-        except ImportError:
-            print("⚠️  LightGBM not available")
+        # Mean and variance
+        stacked_preds = torch.stack(predictions, dim=0)  # [n_models, batch_size, output_dim]
+        mean_pred = stacked_preds.mean(dim=0)
+        std_pred = stacked_preds.std(dim=0)
+        
+        return mean_pred, std_pred
     
-    def train_ensemble(self, X_flat: np.ndarray, y: np.ndarray):
-        """TRAIN ML ENSEMBLE MODELS"""
-        if not self.ensemble_models:
-            self.build_ml_ensemble()
+    def predict_with_uncertainty(self, x: torch.Tensor, n_samples: int = 100) -> Dict[str, torch.Tensor]:
+        """Prediction with sampling for uncertainty quantification"""
+        all_samples = []
         
-        print("🔥 TRAINING ML ENSEMBLE...")
-        for name, model in self.ensemble_models.items():
-            print(f"🔄 Training {name}...")
-            model.fit(X_flat, y)
+        with torch.no_grad():
+            for _ in range(n_samples):
+                model_preds = []
+                for model in self.models:
+                    pred = model(x)
+                    model_preds.append(pred)
+                
+                stacked = torch.stack(model_preds, dim=0)
+                all_samples.append(stacked)
+            
+        # Uncertainty statistics
+        all_samples = torch.stack(all_samples, dim=0)  # [n_samples, n_models, batch_size, output_dim]
         
-        self.is_trained = True
+        return {
+            'mean': all_samples.mean(dim=(0, 1)),
+            'std': all_samples.std(dim=(0, 1)),
+            'aleatoric': all_samples.var(dim=1).mean(dim=0),  # Aleatoric uncertainty
+            'epistemic': all_samples.mean(dim=1).var(dim=0),  # Epistemic uncertainty
+            'samples': all_samples
+        }
     
-    def train_cnn_lstm(self, X_seq: np.ndarray, y: np.ndarray, 
-                      X_val: np.ndarray = None, y_val: np.ndarray = None) -> Dict:
-        """TRAIN CNN-LSTM MODEL"""
-        if self.cnn_lstm_model is None:
-            self.cnn_lstm_model = self.build_cnn_lstm(X_seq.shape[1:])
+    def ensemble_diversity_loss(self, x: torch.Tensor) -> torch.Tensor:
+        """Calculate ensemble diversity regularization loss"""
+        predictions = []
         
-        callbacks = [
-            EarlyStopping(patience=10, restore_best_weights=True, verbose=1),
-            ReduceLROnPlateau(patience=5, factor=0.5, verbose=1)
-        ]
+        for model in self.models:
+            pred = model(x)
+            predictions.append(pred)
+            
+        stacked_preds = torch.stack(predictions, dim=0)  # [n_models, batch_size, output_dim]
         
-        validation_data = (X_val, y_val) if X_val is not None else None
+        # Calculate pairwise diversity
+        n_models = len(self.models)
+        diversity = 0.0
+        count = 0
         
-        print("🔥 TRAINING CNN-LSTM...")
-        history = self.cnn_lstm_model.fit(
-            X_seq, y,
-            validation_data=validation_data,
-            epochs=50,
-            batch_size=32,
-            callbacks=callbacks,
-            verbose=1,
-            shuffle=False
-        )
-        
-        self.is_trained = True
-        return history.history
-    
-    def predict_ensemble(self, X_seq: np.ndarray, X_flat: np.ndarray) -> Dict[str, np.ndarray]:
-        """GENERATE PREDICTIONS FROM ALL MODELS"""
-        predictions = {}
-        
-        # CNN-LSTM PREDICTIONS
-        if self.cnn_lstm_model is not None:
-            predictions['cnn_lstm'] = self.cnn_lstm_model.predict(X_seq, verbose=0).flatten()
-        
-        # ML ENSEMBLE PREDICTIONS
-        for name, model in self.ensemble_models.items():
-            predictions[name] = model.predict(X_flat)
-        
-        # WEIGHTED ENSEMBLE
-        if len(predictions) > 0:
-            predictions['weighted_ensemble'] = np.mean(list(predictions.values()), axis=0)
-        
-        return predictions
-    
-    def save_models(self):
-        """SAVE ALL TRAINED MODELS"""
-        if self.cnn_lstm_model is not None:
-            self.cnn_lstm_model.save(config.MODELS_DIR / 'cnn_lstm_final.h5')
-        
-        for name, model in self.ensemble_models.items():
-            joblib.dump(model, config.MODELS_DIR / f'{name}_model.pkl')
-        
-        print("✅ ALL MODELS SAVED")
+        for i in range(n_models):
+            for j in range(i + 1, n_models):
+                diversity += F.mse_loss(stacked_preds[i], stacked_preds[j])
+                count += 1
+                
+        return diversity / count if count > 0 else torch.tensor(0.0)
