@@ -1,3 +1,13 @@
+# Simulation results
+*.EGRID
+*.INIT
+*.UNRST
+*.SMSPEC
+*.DBG
+*.PRT
+*.LOG
+
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -18,19 +28,25 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
-*.log
-.ipynb_checkpoints
-*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
 .DS_Store
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-models/
-data/raw/
-data/processed/
-results/
+Thumbs.db
+
+# Results
+results/simulation_output/*
+!results/simulation_output/.gitkeep
+results/analysis_results/*
+!results/analysis_results/.gitkeep
+results/plots/*
+!results/plots/.gitkeep
+
+# Logs
+*.log
+logs/
