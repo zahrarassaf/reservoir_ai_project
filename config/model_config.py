@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 @dataclass
 class ReservoirConfig:
@@ -21,6 +21,11 @@ class TemporalModelConfig:
     dropout: float = 0.2
     sequence_length: int = 10
     use_attention: bool = True
+    
+    def validate_architecture(self) -> None:
+        valid_models = ["lstm", "gru", "tcn"]
+        if self.model_type not in valid_models:
+            raise ValueError(f"Model type must be one of {valid_models}")
 
 @dataclass
 class PhysicsInformedConfig:
