@@ -5,8 +5,6 @@ from typing import List, Dict, Optional, Tuple
 import numpy as np
 
 class ResidualBlock(nn.Module):
-    """Residual block for deep learning"""
-    
     def __init__(self, features: int, dropout: float = 0.2):
         super().__init__()
         self.layers = nn.Sequential(
@@ -21,15 +19,12 @@ class ResidualBlock(nn.Module):
         return x + self.layers(x)
 
 class ReservoirNet(nn.Module):
-    """Specialized neural network for reservoir prediction"""
-    
     def __init__(self, input_dim: int, output_dim: int, hidden_dims: List[int], dropout: float = 0.2):
         super().__init__()
         
         layers = []
         prev_dim = input_dim
         
-        # Input layers
         for hidden_dim in hidden_dims:
             layers.extend([
                 nn.Linear(prev_dim, hidden_dim),
@@ -39,7 +34,6 @@ class ReservoirNet(nn.Module):
             ])
             prev_dim = hidden_dim
             
-        # Output layer
         layers.append(nn.Linear(prev_dim, output_dim))
         
         self.network = nn.Sequential(*layers)
@@ -48,9 +42,7 @@ class ReservoirNet(nn.Module):
         return self.network(x)
 
 class DeepEnsembleModel(nn.Module):
-    """Deep ensemble model for prediction and uncertainty quantification"""
-    
-    def __init__(self, config: EnsembleModelConfig):
+    def __init__(self, config):
         super().__init__()
         self.config = config
         self.models = nn.ModuleList([
@@ -63,22 +55,19 @@ class DeepEnsembleModel(nn.Module):
         ])
         
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Prediction with uncertainty quantification"""
         predictions = []
         
         for model in self.models:
             pred = model(x)
             predictions.append(pred)
             
-        # Mean and variance
-        stacked_preds = torch.stack(predictions, dim=0)  # [n_models, batch_size, output_dim]
+        stacked_preds = torch.stack(predictions, dim=0)
         mean_pred = stacked_preds.mean(dim=0)
         std_pred = stacked_preds.std(dim=0)
         
         return mean_pred, std_pred
     
     def predict_with_uncertainty(self, x: torch.Tensor, n_samples: int = 100) -> Dict[str, torch.Tensor]:
-        """Prediction with sampling for uncertainty quantification"""
         all_samples = []
         
         with torch.no_grad():
@@ -91,35 +80,12 @@ class DeepEnsembleModel(nn.Module):
                 stacked = torch.stack(model_preds, dim=0)
                 all_samples.append(stacked)
             
-        # Uncertainty statistics
-        all_samples = torch.stack(all_samples, dim=0)  # [n_samples, n_models, batch_size, output_dim]
+        all_samples = torch.stack(all_samples, dim=0)
         
         return {
             'mean': all_samples.mean(dim=(0, 1)),
             'std': all_samples.std(dim=(0, 1)),
-            'aleatoric': all_samples.var(dim=1).mean(dim=0),  # Aleatoric uncertainty
-            'epistemic': all_samples.mean(dim=1).var(dim=0),  # Epistemic uncertainty
+            'aleatoric': all_samples.var(dim=1).mean(dim=0),
+            'epistemic': all_samples.mean(dim=1).var(dim=0),
             'samples': all_samples
         }
-    
-    def ensemble_diversity_loss(self, x: torch.Tensor) -> torch.Tensor:
-        """Calculate ensemble diversity regularization loss"""
-        predictions = []
-        
-        for model in self.models:
-            pred = model(x)
-            predictions.append(pred)
-            
-        stacked_preds = torch.stack(predictions, dim=0)  # [n_models, batch_size, output_dim]
-        
-        # Calculate pairwise diversity
-        n_models = len(self.models)
-        diversity = 0.0
-        count = 0
-        
-        for i in range(n_models):
-            for j in range(i + 1, n_models):
-                diversity += F.mse_loss(stacked_preds[i], stacked_preds[j])
-                count += 1
-                
-        return diversity / count if count > 0 else torch.tensor(0.0)
