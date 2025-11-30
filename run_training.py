@@ -6,7 +6,6 @@ from pathlib import Path
 import sys
 import os
 
-# Add the project root to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from config.model_config import SPE9GridConfig, EnsembleModelConfig
@@ -20,22 +19,19 @@ def main():
     parser.add_argument('--data_dir', type=str, required=True, help='Directory containing SPE9 data')
     parser.add_argument('--output_dir', type=str, default='results', help='Output directory')
     parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
-    parser.add_argument('--batch_size', int, default=32, help='Batch size')
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
     
     args = parser.parse_args()
     
-    # Create configurations
     grid_config = SPE9GridConfig()
     model_config = EnsembleModelConfig()
     
-    print("🚀 Starting SPE9 Reservoir Modeling...")
+    print("Starting SPE9 Reservoir Modeling...")
     
     try:
-        # 1. Load SPE9 data
-        print("📊 Loading SPE9 data...")
+        print("Loading SPE9 data...")
         spe9_parser = SPE9DataParser(grid_config)
         
-        # Look for SPE9 files
         spe9_paths = [
             os.path.join(args.data_dir, "SPE9.DATA"),
             os.path.join(args.data_dir, "SPE9_CP.DATA"), 
@@ -49,54 +45,47 @@ def main():
         
         for path in spe9_paths:
             if os.path.exists(path):
-                print(f"🎯 Found SPE9 file: {path}")
+                print(f"Found SPE9 file: {path}")
                 production_data = spe9_parser.parse_spe9_data(path)
                 data_source = "SPE9"
                 break
         
         if production_data is None:
-            print("⚠️ SPE9 files not found, using synthetic data")
+            print("SPE9 files not found, using synthetic data")
             from src.data_loader import OPMDataLoader
             opm_loader = OPMDataLoader(grid_config)
             synthetic_data = opm_loader.load_opm_data()
-            # Convert synthetic data to production data format
             production_data = spe9_parser._generate_spe9_production_data({'simulation_days': 900, 'num_wells': 26})
             data_source = "Synthetic"
         
-        print(f"✅ Data loaded from: {data_source}")
-        print(f"📈 Production data keys: {list(production_data.keys())}")
+        print(f"Data loaded from: {data_source}")
+        print(f"Production data keys: {list(production_data.keys())}")
         
-        # 2. Feature engineering
-        print("🔧 Engineering features...")
+        print("Engineering features...")
         feature_engineer = FeatureEngineer(grid_config)
         features = feature_engineer.create_features(production_data)
         
-        # 3. Prepare training data
-        print("📋 Preparing training data...")
+        print("Preparing training data...")
         x_data, y_data = feature_engineer.prepare_training_data(features)
-        print(f"📊 Training data - X: {x_data.shape}, Y: {y_data.shape}")
+        print(f"Training data - X: {x_data.shape}, Y: {y_data.shape}")
         
-        # 4. Create model
-        print("🧠 Creating ensemble model...")
+        print("Creating ensemble model...")
         model = DeepEnsembleModel(model_config)
-        print(f"✅ Ensemble model created with {len(model.models)} models")
+        print(f"Ensemble model created with {len(model.models)} models")
         
-        # 5. Training
-        print("🎯 Starting training...")
+        print("Starting training...")
         trainer = EnsembleTrainer(model, model_config)
         
-        # Pass the actual data to trainer
         training_data = {'x_data': x_data, 'y_data': y_data}
         training_results = trainer.train_ensemble(training_data, args.epochs, args.batch_size)
         
-        # 6. Save results
-        print("💾 Saving results...")
+        print("Saving results...")
         trainer.save_results(args.output_dir, training_results)
         
-        print("✅ Training completed successfully!")
+        print("Training completed successfully!")
         
     except Exception as e:
-        print(f"❌ Error during training: {e}")
+        print(f"Error during training: {e}")
         import traceback
         traceback.print_exc()
 
