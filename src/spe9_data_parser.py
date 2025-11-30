@@ -1,377 +1,273 @@
-import os
-import re
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
+import torch
+from typing import Dict, List, Tuple, Optional
+import re
+from pathlib import Path
 
-class SPE9DataParser:
-    """Professional parser for SPE9 benchmark with real permeability data"""
+class SPE9ProfessionalParser:
+    """Professional parser for real SPE9 data"""
     
-    def __init__(self, config):
+    def __init__(self, config: SPE9GridConfig):
         self.config = config
-        self.spe9_params = {}
+        self.grid_data = None
+        self.well_data = None
+        self.production_data = None
         
-    def parse_spe9_data(self, data_file_path):
-        """Parse SPE9 DATA file with real permeability values"""
-        print(f"🎯 PARSING SPE9 WITH REAL PERMEABILITY DATA...")
+    def parse_complete_spe9_system(self, data_directory: str) -> Dict[str, torch.Tensor]:
+        """Parse complete SPE9 system and generate training tensors"""
+        print("🎯 Parsing Complete SPE9 Reservoir System...")
         
-        try:
-            # Get directory path
-            data_dir = os.path.dirname(data_file_path)
-            
-            # Read main DATA file
-            with open(data_file_path, 'r') as f:
-                content = f.read()
-            
-            # Parse permeability data
-            perm_data = self._parse_permeability_values(data_dir)
-            
-            # Extract comprehensive parameters
-            self.spe9_params = self._extract_spe9_parameters(content, perm_data)
-            
-            # Generate production data based on real SPE9 behavior
-            production_data = self._generate_realistic_production_data()
-            
-            print(f"✅ SPE9 data generated: {production_data.shape}")
-            return production_data
-            
-        except Exception as e:
-            print(f"❌ SPE9 parsing failed: {str(e)}")
-            return self._generate_fallback_spe9_data()
-    
-    def _parse_permeability_values(self, data_dir):
-        """Parse PERMVALUES.DATA file with actual permeability data"""
-        perm_file = os.path.join(data_dir, "PERMVALUES.DATA")
-        permeability_data = {}
+        # 1. Parse main file
+        main_data = self._parse_spe9_data_file(data_directory)
         
-        if os.path.exists(perm_file):
-            print("📊 Parsing real permeability values...")
-            with open(perm_file, 'r') as f:
-                content = f.read()
-            
-            # Extract all permeability values
-            layer_pattern = r'LAYER\s+(\d+)(.*?)(?=LAYER\s+\d+|\Z)'
-            layer_matches = re.findall(layer_pattern, content, re.DOTALL)
-            
-            for layer_num, layer_content in layer_matches:
-                layer_num = int(layer_num)
-                values = self._extract_values_from_layer(layer_content)
-                permeability_data[layer_num] = values
-            
-            print(f"   Loaded permeability for {len(permeability_data)} layers")
-        else:
-            print("⚠️  PERMVALUES.DATA not found, using synthetic permeability")
-            permeability_data = self._generate_synthetic_permeability()
+        # 2. Parse real permeability data
+        perm_data = self._parse_real_permeability_data(data_directory)
         
-        return permeability_data
-    
-    def _extract_values_from_layer(self, layer_content):
-        """Extract numerical values from layer content"""
-        # Remove comments and extract numbers
-        clean_content = re.sub(r'--.*', '', layer_content)
-        numbers = re.findall(r'[-+]?\d*\.\d+|\d+', clean_content)
-        return [float(x) for x in numbers]
-    
-    def _extract_spe9_parameters(self, content, perm_data):
-        """Extract comprehensive SPE9 parameters"""
-        print("🔍 Extracting SPE9 benchmark parameters...")
+        # 3. Create grid data
+        grid_tensors = self._create_grid_tensors(main_data, perm_data)
         
-        params = {
-            # Grid and basic setup
-            'grid_dimensions': [24, 25, 15],
-            'total_cells': 24 * 25 * 15,
-            'num_wells': 26,
-            
-            # Reservoir properties
-            'initial_pressure': 3600,
-            'datum_depth': 9035,
-            'water_oil_contact': 9950,
-            'gas_oil_contact': 8800,
-            'initial_gor': 1.39,
-            
-            # Rock properties from SPE9
-            'porosity_layers': [
-                0.087, 0.097, 0.111, 0.16, 0.13, 0.17, 0.17, 0.08,
-                0.14, 0.13, 0.12, 0.105, 0.12, 0.116, 0.157
-            ],
-            'permeability_data': perm_data,
-            'rock_compressibility': 4e-6,
-            
-            # Fluid properties from SPE9 PVT
-            'water_fvf': 1.0034,
-            'water_compressibility': 3e-6,
-            'water_viscosity': 0.96,
-            'oil_density': 44.9856,
-            'water_density': 63.0210,
-            'gas_density': 0.07039,
-            
-            # Well specifications
-            'well_locations': self._extract_well_locations(content),
-            'well_completions': self._extract_well_completions(content),
-            
-            # Production controls
-            'injector_controls': {'max_rate': 5000, 'max_bhp': 4000},
-            'producer_controls': {
-                'phase1_rate': 1500,  # Days 0-300
-                'phase2_rate': 100,   # Days 300-360  
-                'phase3_rate': 1500,  # Days 360-900
-                'min_bhp': 1000
-            },
-            
-            # Simulation schedule
-            'simulation_days': 900,
-            'start_date': datetime(2015, 1, 1)
+        # 4. Generate realistic production data
+        production_tensors = self._generate_realistic_production_data()
+        
+        # 5. Combine data
+        complete_data = {
+            **grid_tensors,
+            **production_tensors,
+            'static_features': self._create_static_features(grid_tensors),
+            'dynamic_features': self._create_dynamic_features(production_tensors)
         }
         
-        return params
+        print("✅ Complete SPE9 system parsed successfully!")
+        return complete_data
     
-    def _extract_well_locations(self, content):
-        """Extract well locations from WELSPECS"""
-        wells = {}
-        welspecs_pattern = r"WELSPECS\s*(.*?)\/"
-        match = re.search(welspecs_pattern, content, re.DOTALL | re.IGNORECASE)
+    def _parse_real_permeability_data(self, data_directory: str) -> Dict[str, np.ndarray]:
+        """Parse real permeability data from PERMVALUES.DATA"""
+        perm_file = Path(data_directory) / "PERMVALUES.DATA"
         
-        if match:
-            welspecs_content = match.group(1)
-            well_pattern = r"'(\w+)'\s+['\"]?(\w+)['\"]?\s+(\d+)\s+(\d+)"
-            well_matches = re.findall(well_pattern, welspecs_content)
+        if not perm_file.exists():
+            raise FileNotFoundError(f"PERMVALUES.DATA not found in {data_directory}")
+        
+        with open(perm_file, 'r') as f:
+            content = f.read()
+        
+        # Parse layered structure
+        permx_data = self._parse_layered_permeability(content, 'PERMX')
+        
+        return {
+            'PERMX': permx_data,
+            'PERMY': permx_data,  # Assume isotropic in x-y
+            'PERMZ': permx_data * 0.1  # Typical vertical anisotropy
+        }
+    
+    def _parse_layered_permeability(self, content: str, keyword: str) -> np.ndarray:
+        """Parse layered permeability data"""
+        print(f"🔍 Parsing {keyword} data...")
+        
+        # Extract data for each layer
+        layer_pattern = r'-- LAYER\s+(\d+)(.*?)(?=-- LAYER|\Z)'
+        layers_data = []
+        
+        for layer_match in re.finditer(layer_pattern, content, re.DOTALL):
+            layer_num = int(layer_match.group(1))
+            layer_content = layer_match.group(2)
             
-            for match in well_matches:
-                well_name, group, i, j = match
-                wells[well_name.strip()] = {
-                    'i': int(i),
-                    'j': int(j),
-                    'group': group
-                }
+            # Parse rows for each layer
+            row_data = self._parse_layer_rows(layer_content)
+            layers_data.append(row_data)
         
-        return wells
+        # Convert to 3D array
+        perm_array = np.stack(layers_data, axis=0)  # Shape: (nz, ny, nx)
+        return perm_array
     
-    def _extract_well_completions(self, content):
-        """Extract well completion data from COMPDAT"""
-        completions = {}
-        compdat_pattern = r"COMPDAT\s*(.*?)\/"
-        match = re.search(compdat_pattern, content, re.DOTALL | re.IGNORECASE)
+    def _parse_layer_rows(self, layer_content: str) -> np.ndarray:
+        """Parse rows for each layer"""
+        row_pattern = r'-- ROW\s+(\d+)(.*?)(?=-- ROW|\Z)'
+        rows_data = []
         
-        if match:
-            compdat_content = match.group(1)
-            comp_pattern = r"'(\w+)'\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)"
-            comp_matches = re.findall(comp_pattern, compdat_content)
+        for row_match in re.finditer(row_pattern, layer_content, re.DOTALL):
+            row_num = int(row_match.group(1))
+            row_content = row_match.group(2)
             
-            for match in comp_matches:
-                well_name, i, j, k_upper, k_lower = match
-                completions[well_name] = {
-                    'i': int(i),
-                    'j': int(j), 
-                    'k_upper': int(k_upper),
-                    'k_lower': int(k_lower),
-                    'status': 'OPEN'
-                }
+            # Extract numerical values
+            numbers = re.findall(r'[\d.]+(?:e-?\d+)?', row_content)
+            row_values = [float(x) for x in numbers]
+            rows_data.append(row_values)
         
-        return completions
+        return np.array(rows_data)
     
-    def _generate_realistic_production_data(self):
-        """Generate production data based on real SPE9 behavior"""
-        np.random.seed(self.config.RANDOM_STATE)
+    def _create_grid_tensors(self, main_data: Dict, perm_data: Dict) -> Dict[str, torch.Tensor]:
+        """Create grid tensors for training"""
+        # Create 3D grid
+        nx, ny, nz = self.config.nx, self.config.ny, self.config.nz
         
-        data = []
-        num_wells = self.spe9_params['num_wells']
-        total_days = self.spe9_params['simulation_days']
-        start_date = self.spe9_params['start_date']
+        # Static tensors
+        static_tensors = {
+            'permeability_x': torch.tensor(perm_data['PERMX'], dtype=torch.float32),
+            'permeability_z': torch.tensor(perm_data['PERMZ'], dtype=torch.float32),
+            'porosity': self._create_porosity_tensor(),
+            'depth': self._create_depth_tensor(),
+            'region': self._create_region_tensor()
+        }
         
-        print("🔄 Generating realistic SPE9 production profiles...")
+        return static_tensors
+    
+    def _create_porosity_tensor(self) -> torch.Tensor:
+        """Create porosity tensor based on layers"""
+        porosity_tensor = torch.zeros(self.config.nz, self.config.ny, self.config.nx)
         
-        for well_idx in range(num_wells):
-            well_name = f"PRODU{well_idx+1:02d}" if well_idx > 0 else "INJE1"
-            is_injector = well_idx == 0
+        for k in range(self.config.nz):
+            porosity_tensor[k] = self.config.porosity_layers[k]
             
-            # Get well location
-            well_loc = self.spe9_params['well_locations'].get(well_name, {'i': 1, 'j': 1})
+        return porosity_tensor
+    
+    def _generate_realistic_production_data(self) -> Dict[str, torch.Tensor]:
+        """Generate realistic production data based on SPE9"""
+        time_steps = 900  # 900 days simulation
+        
+        # Field-level production data
+        field_data = {
+            'FOPR': self._generate_field_oil_production(time_steps),  # Field Oil Production Rate
+            'FGPR': self._generate_field_gas_production(time_steps),  # Field Gas Production Rate  
+            'FWPR': self._generate_field_water_production(time_steps), # Field Water Production Rate
+            'FGOR': self._generate_field_gor(time_steps),  # Field Gas-Oil Ratio
+        }
+        
+        # Well data
+        well_data = self._generate_well_production_data(time_steps)
+        
+        return {**field_data, **well_data}
+    
+    def _generate_field_oil_production(self, time_steps: int) -> torch.Tensor:
+        """Generate field oil production data"""
+        # Based on SPE9 specs: 25 producers with 1500 STB/D + injector
+        base_production = torch.ones(time_steps) * 25 * 1500  # STB/D
+        
+        # Add realistic behavior
+        time = torch.arange(time_steps).float()
+        
+        # Production decline over time
+        decline = torch.exp(-time / 2000)  # Exponential decline
+        
+        # Random fluctuations
+        noise = torch.normal(0, 500, (time_steps,))
+        
+        production = base_production * decline + noise
+        return production
+    
+    def _generate_field_gas_production(self, time_steps: int) -> torch.Tensor:
+        """Generate field gas production data"""
+        # Gas production follows oil production with increasing GOR
+        time = torch.arange(time_steps).float()
+        base_gas = torch.ones(time_steps) * 50000  # MCF/D
+        
+        # Increasing GOR trend
+        gor_increase = 1.0 + (time / time_steps) * 0.5
+        
+        production = base_gas * gor_increase
+        return production
+    
+    def _generate_field_water_production(self, time_steps: int) -> torch.Tensor:
+        """Generate field water production data"""
+        time = torch.arange(time_steps).float()
+        
+        # Water breakthrough and increasing water cut
+        water_cut = torch.sigmoid((time - 300) / 100) * 0.8
+        
+        base_water = torch.ones(time_steps) * 1000  # STB/D
+        production = base_water * water_cut
+        
+        return production
+    
+    def _generate_field_gor(self, time_steps: int) -> torch.Tensor:
+        """Generate field gas-oil ratio data"""
+        time = torch.arange(time_steps).float()
+        
+        # Increasing GOR due to reservoir depletion
+        base_gor = 1000  # SCF/STB
+        gor_increase = 1.0 + (time / time_steps) * 1.0
+        
+        gor = torch.ones(time_steps) * base_gor * gor_increase
+        return gor
+    
+    def _generate_well_production_data(self, time_steps: int) -> Dict[str, torch.Tensor]:
+        """Generate individual well production data"""
+        n_wells = 26  # 25 producers + 1 injector
+        
+        well_data = {}
+        for i in range(n_wells):
+            well_name = f'WELL_{i+1:02d}'
             
-            for day in range(0, total_days + 1, 10):  # 10-day intervals
-                # SPE9-specific production behavior
-                if is_injector:
-                    rate, pressure, water_cut, gor = self._simulate_injector_behavior(day)
-                else:
-                    rate, pressure, water_cut, gor = self._simulate_producer_behavior(day, well_idx)
-                
-                # Get permeability for this well location
-                perm_value = self._get_well_permeability(well_loc['i'], well_loc['j'], well_idx)
-                
-                row = {
-                    'well_id': well_name,
-                    'date': start_date + timedelta(days=day),
-                    'time_step': day // 10,
-                    'days_simulation': day,
-                    'pressure': pressure,
-                    'water_cut': water_cut,
-                    'gas_oil_ratio': gor,
-                    'permeability': perm_value,
-                    'porosity': np.random.choice(self.spe9_params['porosity_layers']),
-                    'bottomhole_pressure': pressure - np.random.uniform(200, 500),
-                    'wellhead_pressure': pressure - np.random.uniform(500, 1000),
-                    'choke_size': np.random.uniform(20, 80),
-                    'oil_rate': rate if not is_injector else 0,
-                    'water_rate': rate if is_injector else rate * water_cut / (1 - water_cut),
-                    'gas_rate': rate * gor / 1000 if not is_injector else 0,
-                    'well_type': 'injector' if is_injector else 'producer',
-                    'grid_i': well_loc['i'],
-                    'grid_j': well_loc['j'],
-                    'completion_status': 'OPEN',
-                    'production_phase': self._get_production_phase(day)
-                }
-                data.append(row)
+            if i == 0:  # Injector
+                well_data[f'{well_name}_WIR'] = torch.ones(time_steps) * 5000  # Water injection
+                well_data[f'{well_name}_BHP'] = torch.ones(time_steps) * 3500  # Bottom hole pressure
+            else:  # Producers
+                well_data[f'{well_name}_WOPR'] = torch.ones(time_steps) * 1500  # Oil production
+                well_data[f'{well_name}_WGPR'] = torch.ones(time_steps) * 2000  # Gas production
+                well_data[f'{well_name}_WWPR'] = torch.ones(time_steps) * 500   # Water production
+                well_data[f'{well_name}_BHP'] = torch.ones(time_steps) * 1500   # Bottom hole pressure
         
-        df = pd.DataFrame(data)
-        return df
+        return well_data
     
-    def _simulate_producer_behavior(self, day, well_idx):
-        """Simulate SPE9 producer with three-phase behavior"""
-        controls = self.spe9_params['producer_controls']
-        initial_pressure = self.spe9_params['initial_pressure']
+    def _create_depth_tensor(self) -> torch.Tensor:
+        """Create depth tensor"""
+        nx, ny, nz = self.config.nx, self.config.ny, self.config.nz
+        depth_tensor = torch.zeros(nz, ny, nx)
         
-        # SPE9 production phases
-        if day < 300:
-            # Phase 1: High production
-            base_rate = controls['phase1_rate']
-            decline_factor = 0.3 * (day / 300)
-            water_cut = 0.05 + (day / 300) * 0.35
-        elif day < 360:
-            # Phase 2: Restricted production
-            base_rate = controls['phase2_rate']
-            decline_factor = 0.3 + 0.1 * ((day - 300) / 60)
-            water_cut = 0.4 + ((day - 300) / 60) * 0.2
-        else:
-            # Phase 3: Return to production
-            base_rate = controls['phase3_rate']
-            recovery = 1 - ((day - 360) / 540) * 0.6
-            decline_factor = 0.4 + 0.3 * ((day - 360) / 540)
-            water_cut = 0.6 + ((day - 360) / 540) * 0.25
-        
-        # Apply well-specific variations based on permeability
-        perm_factor = 0.8 + (well_idx % 10) * 0.04
-        oil_rate = base_rate * perm_factor * (1 - decline_factor)
-        
-        # Gas oil ratio behavior
-        gor = 400 + (day / 900) * 1200
-        
-        # Pressure decline
-        pressure = initial_pressure * (1 - decline_factor * 0.8)
-        
-        # Add realistic noise
-        noise = np.random.normal(0, oil_rate * 0.08)
-        oil_rate = np.clip(oil_rate + noise, 10, None)
-        water_cut = np.clip(water_cut + np.random.normal(0, 0.02), 0.02, 0.85)
-        pressure = np.clip(pressure + np.random.normal(0, 25), 800, initial_pressure)
-        gor = np.clip(gor + np.random.normal(0, 50), 300, 2000)
-        
-        return oil_rate, pressure, water_cut, gor
-    
-    def _simulate_injector_behavior(self, day):
-        """Simulate water injector behavior"""
-        controls = self.spe9_params['injector_controls']
-        initial_pressure = self.spe9_params['initial_pressure']
-        
-        # Injector maintains relatively constant rate
-        base_rate = controls['max_rate']
-        variation = np.random.normal(0, base_rate * 0.1)
-        injection_rate = np.clip(base_rate + variation, 3000, 6000)
-        
-        # Pressure maintenance effect
-        pressure_decline = (day / 900) * 0.2  # Less decline near injector
-        pressure = initial_pressure * (1 - pressure_decline)
-        
-        return injection_rate, pressure, 0, 0
-    
-    def _get_well_permeability(self, i, j, well_idx):
-        """Get permeability value for well location"""
-        perm_data = self.spe9_params['permeability_data']
-        
-        if perm_data:
-            # Calculate cell index from i, j coordinates
-            cell_idx = (j - 1) * 24 + (i - 1)
+        # Create depth structure - increasing with layer
+        for k in range(nz):
+            layer_depth = 2000 + sum(self.config.dz[:k])  # Base depth + cumulative thickness
+            depth_tensor[k] = layer_depth
             
-            # Use layer 1 permeability for simplicity
-            layer_perm = perm_data.get(1, [])
-            if layer_perm and cell_idx < len(layer_perm):
-                return layer_perm[cell_idx]
-        
-        # Fallback to synthetic permeability
-        return np.random.uniform(10, 2000)
+        return depth_tensor
     
-    def _get_production_phase(self, day):
-        """Get current production phase"""
-        if day < 300:
-            return "phase1_high_production"
-        elif day < 360:
-            return "phase2_restricted"
-        else:
-            return "phase3_recovery"
-    
-    def _generate_synthetic_permeability(self):
-        """Generate synthetic permeability data"""
-        print("🔄 Generating synthetic permeability data...")
-        permeability = {}
+    def _create_region_tensor(self) -> torch.Tensor:
+        """Create region tensor for geological zones"""
+        nx, ny, nz = self.config.nx, self.config.ny, self.config.nz
+        region_tensor = torch.zeros(nz, ny, nx)
         
-        for layer in range(1, 16):
-            # Generate realistic permeability values
-            if layer in [1, 2, 3]:
-                # High permeability layers
-                values = np.random.lognormal(5.5, 0.8, 600)
-            elif layer in [4, 5, 6]:
-                # Medium permeability layers
-                values = np.random.lognormal(4.0, 0.6, 600)
+        # Simple region assignment based on position
+        for k in range(nz):
+            if k < 5:
+                region_tensor[k] = 1  # Upper zone
+            elif k < 10:
+                region_tensor[k] = 2  # Middle zone
             else:
-                # Low permeability layers
-                values = np.random.lognormal(2.5, 0.5, 600)
-            
-            permeability[layer] = values.tolist()
-        
-        return permeability
-    
-    def _generate_fallback_spe9_data(self):
-        """Generate fallback data if parsing fails"""
-        print("🔄 Generating fallback SPE9 data...")
-        
-        np.random.seed(self.config.RANDOM_STATE)
-        data = []
-        num_wells = 26
-        total_days = 900
-        start_date = datetime(2015, 1, 1)
-        
-        for well_idx in range(num_wells):
-            well_name = f"PRODU{well_idx+1:02d}" if well_idx > 0 else "INJE1"
-            is_injector = well_idx == 0
-            
-            for day in range(0, total_days + 1, 10):
-                if is_injector:
-                    rate = np.random.uniform(4500, 5500)
-                    pressure = 3600 - (day / total_days) * 800
-                    water_cut, gor = 0, 0
-                else:
-                    # SPE9 three-phase behavior
-                    if day < 300:
-                        rate = np.random.uniform(1200, 1500) * (1 - day/300 * 0.3)
-                        water_cut = 0.05 + (day / 300) * 0.35
-                    elif day < 360:
-                        rate = np.random.uniform(80, 120)
-                        water_cut = 0.4 + ((day - 300) / 60) * 0.2
-                    else:
-                        recovery = 1 - ((day - 360) / 540) * 0.6
-                        rate = np.random.uniform(800, 1200) * recovery
-                        water_cut = 0.6 + ((day - 360) / 540) * 0.25
-                    
-                    pressure = 3600 - (day / total_days) * 1000
-                    gor = 400 + (day / total_days) * 1200
+                region_tensor[k] = 3  # Lower zone
                 
-                row = {
-                    'well_id': well_name,
-                    'time_step': day // 10,
-                    'pressure': pressure,
-                    'water_cut': water_cut,
-                    'gas_oil_ratio': gor,
-                    'oil_rate': rate if not is_injector else 0,
-                    'well_type': 'injector' if is_injector else 'producer'
-                }
-                data.append(row)
+        return region_tensor
+    
+    def _create_static_features(self, grid_tensors: Dict) -> torch.Tensor:
+        """Create combined static features tensor"""
+        features_list = [
+            grid_tensors['permeability_x'].flatten(),
+            grid_tensors['porosity'].flatten(),
+            grid_tensors['depth'].flatten(),
+            grid_tensors['region'].flatten()
+        ]
         
-        return pd.DataFrame(data)
+        static_features = torch.stack(features_list, dim=1)
+        return static_features
+    
+    def _create_dynamic_features(self, production_tensors: Dict) -> torch.Tensor:
+        """Create combined dynamic features tensor"""
+        # Use field-level production data as dynamic features
+        dynamic_features_list = [
+            production_tensors['FOPR'],
+            production_tensors['FGPR'],
+            production_tensors['FWPR'],
+            production_tensors['FGOR']
+        ]
+        
+        dynamic_features = torch.stack(dynamic_features_list, dim=1)
+        return dynamic_features
+    
+    def _parse_spe9_data_file(self, data_directory: str) -> Dict:
+        """Parse main SPE9 data file (placeholder implementation)"""
+        # This would parse the main SPE9.DATA file
+        # For now, return basic structure
+        return {
+            'title': 'SPE9 Comparative Solution Project',
+            'grid_dimensions': (self.config.nx, self.config.ny, self.config.nz),
+            'phases': ['OIL', 'WATER', 'GAS']
+        }
