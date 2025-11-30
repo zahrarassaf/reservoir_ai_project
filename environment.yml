@@ -1,0 +1,23 @@
+name: reservoir-ai
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.8
+  - pytorch=1.9.0
+  - torchvision
+  - cudatoolkit=11.1
+  - numpy=1.21.0
+  - pandas=1.3.0
+  - scikit-learn=1.0.0
+  - matplotlib=3.5.0
+  - seaborn=0.11.0
+  - tqdm=4.62.0
+  - pyyaml=6.0
+  - pathlib2=2.3.0
+  - pytest=6.0.0
+  - black=21.0.0
+  - flake8=3.9.0
+  - jupyter
+  - ipython
