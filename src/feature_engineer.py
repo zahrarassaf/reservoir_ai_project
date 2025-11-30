@@ -1,121 +1,140 @@
-import numpy as np
-import pandas as pd
-from sklearn.feature_selection import SelectKBest, f_regression, mutual_info_regression
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
+import torch
+import torch.nn as nn
+from typing import Dict, List, Tuple
 
 class AdvancedFeatureEngineer:
-    def __init__(self, config):
+    """Advanced feature engineer for reservoir data"""
+    
+    def __init__(self, config: SPE9GridConfig):
         self.config = config
-        self.feature_selector = None
-        self.pca = None
         
-    def create_advanced_features(self, X, feature_names):
-        """Create sophisticated feature engineering pipeline"""
-        print("\n🔧 ADVANCED FEATURE ENGINEERING")
-        print("===============================")
+    def create_geological_features(self, static_tensors: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Create advanced geological features"""
+        features = {}
         
-        original_features = X.shape[-1]
-        engineered_features = []
+        # Basic features
+        features['permeability_log'] = torch.log(static_tensors['permeability_x'] + 1e-8)
+        features['porosity'] = static_tensors['porosity']
+        features['depth_normalized'] = self._normalize_depth(static_tensors['depth'])
         
-        # 1. Rolling statistics
-        X_with_rolling = self._add_rolling_features(X, feature_names)
-        engineered_features.extend([f"rolling_{name}" for name in feature_names])
+        # Derived features
+        features['flow_capacity'] = static_tensors['permeability_x'] * static_tensors['porosity']
+        features['storage_capacity'] = static_tensors['porosity'] * self.config.dz[0]  # Simplified
         
-        # 2. Temporal features
-        X_with_time = self._add_temporal_features(X_with_rolling)
+        # Statistical features
+        features.update(self._create_statistical_features(static_tensors))
         
-        # 3. Interaction features
-        X_with_interactions = self._add_interaction_features(X_with_time, feature_names)
+        # Spatial features
+        features.update(self._create_spatial_features(static_tensors))
         
-        # 4. Statistical features
-        X_with_stats = self._add_statistical_features(X_with_interactions)
-        
-        print(f"   Original features: {original_features}")
-        print(f"   Engineered features: {X_with_stats.shape[-1]}")
-        
-        return X_with_stats
+        return features
     
-    def _add_rolling_features(self, X, feature_names):
-        """Add rolling window statistics"""
-        rolling_features = []
+    def _create_statistical_features(self, tensors: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Create statistical features"""
+        stats = {}
         
-        for window in self.config.ROLLING_WINDOWS:
-            if window < X.shape[1]:
-                # Rolling mean
-                roll_mean = np.nanmean(self._rolling_window(X, window, axis=1), axis=2)
-                # Rolling std
-                roll_std = np.nanstd(self._rolling_window(X, window, axis=1), axis=2)
+        for name, tensor in tensors.items():
+            # Local statistics
+            stats[f'{name}_mean'] = tensor.mean(dim=(1, 2), keepdim=True).expand_as(tensor)
+            stats[f'{name}_std'] = tensor.std(dim=(1, 2), keepdim=True).expand_as(tensor)
+            stats[f'{name}_max'] = tensor.max(dim=1, keepdim=True)[0].max(dim=2, keepdim=True)[0]
+            
+        return stats
+    
+    def _create_spatial_features(self, tensors: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Create spatial features"""
+        spatial = {}
+        
+        nx, ny, nz = self.config.nx, self.config.ny, self.config.nz
+        
+        # Grid coordinates
+        x_coords = torch.linspace(0, 1, nx).reshape(1, 1, nx).expand(nz, ny, nx)
+        y_coords = torch.linspace(0, 1, ny).reshape(1, ny, 1).expand(nz, ny, nx)
+        z_coords = torch.linspace(0, 1, nz).reshape(nz, 1, 1).expand(nz, ny, nx)
+        
+        spatial['x_coord'] = x_coords
+        spatial['y_coord'] = y_coords  
+        spatial['z_coord'] = z_coords
+        
+        # Well proximity (simplified)
+        spatial['well_proximity'] = self._calculate_well_proximity()
+        
+        return spatial
+    
+    def _normalize_depth(self, depth_tensor: torch.Tensor) -> torch.Tensor:
+        """Normalize depth tensor"""
+        depth_min = depth_tensor.min()
+        depth_max = depth_tensor.max()
+        return (depth_tensor - depth_min) / (depth_max - depth_min)
+    
+    def _calculate_well_proximity(self) -> torch.Tensor:
+        """Calculate proximity to wells (simplified)"""
+        nx, ny, nz = self.config.nx, self.config.ny, self.config.nz
+        proximity = torch.ones(nz, ny, nx)
+        
+        # Simplified well locations (from SPE9 well specs)
+        well_locations = [
+            (24, 25), (5, 1), (8, 2), (11, 3), (10, 4),  # Sample well locations
+            (12, 5), (4, 6), (8, 7), (14, 8), (11, 9)    # More wells
+        ]
+        
+        # Calculate minimum distance to any well
+        for k in range(nz):
+            for i in range(nx):
+                for j in range(ny):
+                    min_dist = float('inf')
+                    for well_i, well_j in well_locations:
+                        dist = ((i - well_i) ** 2 + (j - well_j) ** 2) ** 0.5
+                        min_dist = min(min_dist, dist)
+                    proximity[k, j, i] = 1.0 / (1.0 + min_dist)  # Inverse distance
+        
+        return proximity
+    
+    def create_temporal_features(self, production_data: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Create advanced temporal features"""
+        temporal = {}
+        time_steps = len(production_data['FOPR'])
+        
+        # Basic time features
+        time = torch.arange(time_steps).float()
+        temporal['time'] = time
+        temporal['time_normalized'] = time / time_steps
+        
+        # Time derivatives
+        for name, data in production_data.items():
+            if len(data.shape) == 1:  # Field-level data
+                temporal[f'{name}_derivative'] = self._calculate_derivative(data)
+                temporal[f'{name}_cumulative'] = torch.cumsum(data, dim=0)
                 
-                rolling_features.extend([roll_mean, roll_std])
-        
-        if rolling_features:
-            return np.concatenate([X] + rolling_features, axis=-1)
-        return X
+        return temporal
     
-    def _add_temporal_features(self, X):
-        """Add temporal characteristics"""
-        batch_size, seq_len, n_features = X.shape
-        
-        # Position encoding
-        positions = np.arange(seq_len) / seq_len
-        positions = np.tile(positions, (batch_size, n_features, 1)).transpose(0, 2, 1)
-        
-        # Seasonal patterns
-        time_of_cycle = np.sin(2 * np.pi * np.arange(seq_len) / 365)
-        time_of_cycle = np.tile(time_of_cycle, (batch_size, n_features, 1)).transpose(0, 2, 1)
-        
-        return np.concatenate([X, positions, time_of_cycle], axis=-1)
+    def _calculate_derivative(self, data: torch.Tensor) -> torch.Tensor:
+        """Calculate numerical derivative"""
+        derivative = torch.zeros_like(data)
+        derivative[1:] = data[1:] - data[:-1]
+        return derivative
     
-    def _add_interaction_features(self, X, feature_names):
-        """Add feature interactions"""
-        # This would be implemented based on domain knowledge
-        # For now, return original features
-        return X
-    
-    def _add_statistical_features(self, X):
-        """Add statistical moment features"""
-        batch_size, seq_len, n_features = X.shape
+    def create_advanced_features(self, complete_data: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Create all advanced features combined"""
+        geological_features = self.create_geological_features({
+            'permeability_x': complete_data['permeability_x'],
+            'porosity': complete_data['porosity'],
+            'depth': complete_data['depth'],
+            'region': complete_data['region']
+        })
         
-        # Statistical moments along sequence axis
-        mean = np.mean(X, axis=1, keepdims=True)
-        std = np.std(X, axis=1, keepdims=True)
-        skewness = self._skewness(X, axis=1, keepdims=True)
+        temporal_features = self.create_temporal_features({
+            'FOPR': complete_data['FOPR'],
+            'FGPR': complete_data['FGPR'],
+            'FWPR': complete_data['FWPR'],
+            'FGOR': complete_data['FGOR']
+        })
         
-        statistical_features = np.concatenate([mean, std, skewness], axis=-1)
-        statistical_features = np.repeat(statistical_features, seq_len, axis=1)
+        # Combine all features
+        advanced_features = {
+            **geological_features,
+            **temporal_features,
+            'production_data': complete_data  # Keep original data
+        }
         
-        return np.concatenate([X, statistical_features], axis=-1)
-    
-    def _rolling_window(self, a, window, axis=1):
-        """Create rolling window view of array"""
-        shape = a.shape[:axis] + (a.shape[axis] - window + 1, window) + a.shape[axis+1:]
-        strides = a.strides[:axis] + (a.strides[axis], a.strides[axis]) + a.strides[axis+1:]
-        return np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)
-    
-    def _skewness(self, a, axis=None, keepdims=False):
-        """Calculate skewness along specified axis"""
-        a = np.asarray(a)
-        mean = np.mean(a, axis=axis, keepdims=True)
-        std = np.std(a, axis=axis, keepdims=True, ddof=0)
-        skew = np.mean(((a - mean) / std) ** 3, axis=axis, keepdims=keepdims)
-        return skew
-    
-    def select_features(self, X, y, k=20):
-        """Select most important features"""
-        print(f"\n🎯 FEATURE SELECTION (top {k} features)")
-        
-        # Reshape for feature selection
-        X_flat = X.reshape(-1, X.shape[-1])
-        y_repeated = np.repeat(y, X.shape[1])
-        
-        # Use mutual information for non-linear relationships
-        self.feature_selector = SelectKBest(score_func=mutual_info_regression, k=min(k, X.shape[-1]))
-        X_selected = self.feature_selector.fit_transform(X_flat, y_repeated)
-        
-        # Reshape back to sequences
-        X_selected = X_selected.reshape(X.shape[0], X.shape[1], -1)
-        
-        print(f"   Selected {X_selected.shape[-1]} features from {X.shape[-1]}")
-        
-        return X_selected
+        return advanced_features
