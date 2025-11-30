@@ -7,7 +7,7 @@ __all__ = [
     'DataConfig',
     'ReservoirConfig', 
     'TemporalModelConfig',
-    'PhysicsInformedConfig',
+    'PhysicsInformedConfig', 
     'EnsembleConfig',
     'TrainingConfig'
 ]
