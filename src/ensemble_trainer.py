@@ -13,6 +13,7 @@ class EnsembleTrainer:
         self.optimizers = []
         self.schedulers = []
         
+        # Create optimizer for each model in ensemble
         for model in self.model.models:
             optimizer = optim.AdamW(
                 model.parameters(),
@@ -26,10 +27,11 @@ class EnsembleTrainer:
             )
             self.schedulers.append(scheduler)
             
-    def train_ensemble(self, features, epochs: int, batch_size: int):
+    def train_ensemble(self, training_data, epochs: int, batch_size: int):
         print("Starting ensemble training...")
         
-        train_loader = self._prepare_data_loader(features, batch_size)
+        # Prepare data loader from actual data
+        train_loader = self._prepare_data_loader(training_data, batch_size)
         
         training_history = {
             'train_loss': [],
@@ -43,12 +45,14 @@ class EnsembleTrainer:
             train_loss = self._train_epoch(train_loader)
             val_loss = self._validate_epoch(train_loader)
             
+            # Update learning rates
             for scheduler in self.schedulers:
                 scheduler.step(val_loss)
             
             training_history['train_loss'].append(train_loss)
             training_history['val_loss'].append(val_loss)
             
+            # Early stopping check
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 patience_counter = 0
@@ -57,11 +61,12 @@ class EnsembleTrainer:
                 patience_counter += 1
                 
             if patience_counter >= self.config.patience:
-                print(f"Early stopping at epoch {epoch}")
+                print(f"🛑 Early stopping at epoch {epoch}")
                 break
             
-            if epoch % 100 == 0:
-                print(f"Epoch {epoch}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}")
+            # Print progress
+            if epoch % 10 == 0:
+                print(f"📊 Epoch {epoch}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}")
         
         return training_history
     
@@ -73,12 +78,17 @@ class EnsembleTrainer:
         for batch_idx, (x, y) in enumerate(data_loader):
             batch_loss = 0.0
             
+            # Train each model in ensemble
             for i, (model, optimizer) in enumerate(zip(self.model.models, self.optimizers)):
                 optimizer.zero_grad()
                 
+                # Forward pass
                 pred = model(x)
+                
+                # Calculate loss
                 loss = nn.MSELoss()(pred, y)
                 
+                # Backward pass
                 loss.backward()
                 optimizer.step()
                 
@@ -96,6 +106,7 @@ class EnsembleTrainer:
         
         with torch.no_grad():
             for x, y in data_loader:
+                # Get ensemble prediction
                 mean_pred, _ = self.model(x)
                 loss = nn.MSELoss()(mean_pred, y)
                 total_loss += loss.item()
@@ -103,10 +114,12 @@ class EnsembleTrainer:
         
         return total_loss / num_batches
     
-    def _prepare_data_loader(self, features, batch_size: int):
-        x_data = torch.randn(1000, len(self.config.input_features))
-        y_data = torch.randn(1000, len(self.config.output_features))
+    def _prepare_data_loader(self, training_data, batch_size: int):
+        """Prepare data loader from actual training data"""
+        x_data = training_data['x_data']
+        y_data = training_data['y_data']
         
+        # Create dataset
         dataset = torch.utils.data.TensorDataset(x_data, y_data)
         data_loader = torch.utils.data.DataLoader(
             dataset, batch_size=batch_size, shuffle=True
@@ -115,6 +128,7 @@ class EnsembleTrainer:
         return data_loader
     
     def _save_checkpoint(self, epoch: int, val_loss: float):
+        """Save model checkpoint"""
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
@@ -125,12 +139,15 @@ class EnsembleTrainer:
         torch.save(checkpoint, f"checkpoints/best_model_epoch_{epoch}.pth")
     
     def save_results(self, output_dir: str, results):
+        """Save training results"""
         output_path = Path(output_dir)
         output_path.mkdir(exist_ok=True)
         
+        # Save training history
         with open(output_path / "training_history.json", "w") as f:
             json.dump({k: [float(x) for x in v] for k, v in results.items()}, f, indent=2)
         
+        # Save final model
         torch.save(self.model.state_dict(), output_path / "final_model.pth")
         
-        print(f"Results saved to {output_dir}")
+        print(f"💾 Results saved to {output_dir}")
