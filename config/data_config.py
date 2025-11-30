@@ -1,40 +1,48 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import List, Tuple, Optional
 
 @dataclass
 class DataConfig:
-    """Configuration for data loading and preprocessing"""
-    # Paths
-    data_dir: Path = Path("data/spe9")
+    opm_data_dir: Path = Path("../../opm-data")
+    spe9_case: str = "spe9"
+    
     grid_file: str = "SPE9.GRID"
-    init_file: str = "SPE9.INIT" 
-    restart_file: str = "SPE9.X0000"
+    init_file: str = "SPE9.INIT"
+    data_file: str = "SPE9.DATA"
+    unrest_file: str = "SPE9.UNRST"
     
-    # Preprocessing
-    normalize_porosity: bool = True
-    normalize_permeability: bool = True
-    clip_extreme_values: bool = True
+    extract_properties: List[str] = None
+    time_steps: List[int] = None
     
-    # Splitting
+    normalize_features: bool = True
+    remove_outliers: bool = True
+    outlier_std_threshold: float = 3.0
+    
+    sequence_length: int = 10
+    prediction_horizon: int = 5
+    stride: int = 1
+    
     train_ratio: float = 0.7
     val_ratio: float = 0.15
     test_ratio: float = 0.15
+    temporal_split: bool = True
     
-    # Temporal
-    sequence_length: int = 10
-    prediction_horizon: int = 5
+    def __post_init__(self):
+        if self.extract_properties is None:
+            self.extract_properties = [
+                'PRESSURE', 'SWAT', 'SOIL', 
+                'PORO', 'PERMX', 'PERMY', 'PERMZ'
+            ]
+        if self.time_steps is None:
+            self.time_steps = list(range(0, 100, 10))
+    
+    @property
+    def spe9_directory(self) -> Path:
+        return self.opm_data_dir / self.spe9_case
     
     def validate_paths(self) -> None:
-        """Validate that all data files exist"""
-        required_files = [
-            self.data_dir / self.grid_file,
-            self.data_dir / self.init_file,
-            self.data_dir / self.restart_file
-        ]
-        
-        for file_path in required_files:
-            if not file_path.exists():
-                raise FileNotFoundError(
-                    f"Required data file not found: {file_path}"
-                )
+        if not self.opm_data_dir.exists():
+            raise FileNotFoundError(
+                f"OPM data directory not found: {self.opm_data_dir}"
+            )
