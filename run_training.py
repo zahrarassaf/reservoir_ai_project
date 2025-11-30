@@ -5,89 +5,136 @@ import argparse
 from pathlib import Path
 import sys
 import os
+import json
+from datetime import datetime
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from config.model_config import SPE9GridConfig, EnsembleModelConfig
-from src.spe9_data_parser import SPE9DataParser
-from src.feature_engineer import FeatureEngineer
-from src.ensemble_model import DeepEnsembleModel
-from src.ensemble_trainer import EnsembleTrainer
+from config.model_config import (SPE9GridConfig, ReservoirPhysicsConfig, 
+                               TemporalModelConfig, PhysicsInformedConfig, EnsembleConfig)
+from src.data_loader import SPE9DataLoader
+from src.feature_engineer import PhysicsAwareFeatureEngineer
+from src.ensemble_model import DiverseReservoirModel
+from src.physics_informed import PhysicsInformedLoss
+from src.training_orchestrator import ProfessionalTrainer
+
+def setup_experiment(args):
+    """Setup experiment configuration and directories"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    experiment_dir = Path(args.output_dir) / f"experiment_{timestamp}"
+    experiment_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save experiment configuration
+    config = {
+        'timestamp': timestamp,
+        'data_dir': args.data_dir,
+        'epochs': args.epochs,
+        'batch_size': args.batch_size,
+        'learning_rate': args.learning_rate
+    }
+    
+    with open(experiment_dir / "experiment_config.json", 'w') as f:
+        json.dump(config, f, indent=2)
+        
+    return experiment_dir
 
 def main():
-    parser = argparse.ArgumentParser(description='Train SPE9 Reservoir Model')
-    parser.add_argument('--data_dir', type=str, required=True, help='Directory containing SPE9 data')
-    parser.add_argument('--output_dir', type=str, default='results', help='Output directory')
-    parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
-    parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
+    parser = argparse.ArgumentParser(description='Professional SPE9 Reservoir Modeling')
+    parser.add_argument('--data_dir', type=str, required=True, 
+                       help='Directory containing SPE9 data files')
+    parser.add_argument('--output_dir', type=str, default='results', 
+                       help='Output directory for results')
+    parser.add_argument('--epochs', type=int, default=500, 
+                       help='Number of training epochs')
+    parser.add_argument('--batch_size', type=int, default=16, 
+                       help='Batch size for training')
+    parser.add_argument('--learning_rate', type=float, default=1e-4,
+                       help='Learning rate')
+    parser.add_argument('--use_physics', action='store_true',
+                       help='Enable physics-informed training')
     
     args = parser.parse_args()
     
-    grid_config = SPE9GridConfig()
-    model_config = EnsembleModelConfig()
-    
-    print("Starting SPE9 Reservoir Modeling...")
+    # Setup experiment
+    experiment_dir = setup_experiment(args)
+    print(f"🚀 Starting professional SPE9 reservoir modeling experiment...")
+    print(f"📁 Experiment directory: {experiment_dir}")
     
     try:
-        print("Loading SPE9 data...")
-        spe9_parser = SPE9DataParser(grid_config)
+        # Configuration
+        grid_config = SPE9GridConfig()
+        physics_config = ReservoirPhysicsConfig()
+        temporal_config = TemporalModelConfig()
+        physics_informed_config = PhysicsInformedConfig(use_physics_loss=args.use_physics)
+        ensemble_config = EnsembleConfig()
         
-        spe9_paths = [
-            os.path.join(args.data_dir, "SPE9.DATA"),
-            os.path.join(args.data_dir, "SPE9_CP.DATA"), 
-            os.path.join(args.data_dir, "SPE9_CP_GROUP.DATA"),
-            "SPE9.DATA",
-            "spe9/SPE9.DATA"
-        ]
+        # 1. Load real SPE9 data
+        print("📊 Loading real SPE9 dataset...")
+        data_loader = SPE9DataLoader(grid_config)
+        reservoir_data = data_loader.load_complete_dataset(args.data_dir)
         
-        production_data = None
-        data_source = "Unknown"
+        print(f"✅ Loaded reservoir data:")
+        print(f"   - Grid: {reservoir_data.permeability.shape}")
+        print(f"   - Wells: {len(reservoir_data.well_locations)}")
+        print(f"   - Production history: {len(reservoir_data.production['FOPR'])} days")
         
-        for path in spe9_paths:
-            if os.path.exists(path):
-                print(f"Found SPE9 file: {path}")
-                production_data = spe9_parser.parse_spe9_data(path)
-                data_source = "SPE9"
-                break
+        # 2. Professional feature engineering
+        print("🔧 Engineering physics-aware features...")
+        feature_engineer = PhysicsAwareFeatureEngineer(grid_config, physics_config)
+        features = feature_engineer.create_advanced_features(reservoir_data)
         
-        if production_data is None:
-            print("SPE9 files not found, using synthetic data")
-            from src.data_loader import OPMDataLoader
-            opm_loader = OPMDataLoader(grid_config)
-            synthetic_data = opm_loader.load_opm_data()
-            production_data = spe9_parser._generate_spe9_production_data({'simulation_days': 900, 'num_wells': 26})
-            data_source = "Synthetic"
+        print(f"✅ Created {len(features)} feature groups")
         
-        print(f"Data loaded from: {data_source}")
-        print(f"Production data keys: {list(production_data.keys())}")
+        # 3. Create diverse ensemble model
+        print("🧠 Creating diverse ensemble model...")
+        model_config = TemporalModelConfig()  # Using temporal config as base
+        ensemble_model = DiverseReservoirModel(model_config, ensemble_config)
         
-        print("Engineering features...")
-        feature_engineer = FeatureEngineer(grid_config)
-        features = feature_engineer.create_features(production_data)
+        print(f"✅ Ensemble created with {len(ensemble_model.models)} diverse models")
         
-        print("Preparing training data...")
-        x_data, y_data = feature_engineer.prepare_training_data(features)
-        print(f"Training data - X: {x_data.shape}, Y: {y_data.shape}")
+        # 4. Physics-informed loss
+        physics_loss = PhysicsInformedLoss(physics_informed_config, grid_config)
         
-        print("Creating ensemble model...")
-        model = DeepEnsembleModel(model_config)
-        print(f"Ensemble model created with {len(model.models)} models")
+        # 5. Professional training
+        print("🎯 Starting professional training...")
+        trainer = ProfessionalTrainer(
+            model=ensemble_model,
+            physics_loss=physics_loss,
+            experiment_dir=experiment_dir
+        )
         
-        print("Starting training...")
-        trainer = EnsembleTrainer(model, model_config)
+        # Prepare training data
+        training_data = trainer.prepare_training_data(reservoir_data, features)
         
-        training_data = {'x_data': x_data, 'y_data': y_data}
-        training_results = trainer.train_ensemble(training_data, args.epochs, args.batch_size)
+        # Train with proper validation and testing
+        results = trainer.train(
+            training_data=training_data,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            use_physics=args.use_physics
+        )
         
-        print("Saving results...")
-        trainer.save_results(args.output_dir, training_results)
+        # 6. Comprehensive evaluation
+        print("📈 Running comprehensive evaluation...")
+        evaluation_results = trainer.evaluate_comprehensive(results, reservoir_data)
         
-        print("Training completed successfully!")
+        # 7. Save professional report
+        trainer.save_professional_report(results, evaluation_results)
+        
+        print("✅ Professional training completed successfully!")
+        print(f"📊 Results saved to: {experiment_dir}")
         
     except Exception as e:
-        print(f"Error during training: {e}")
+        print(f"❌ Experiment failed: {e}")
         import traceback
         traceback.print_exc()
+        
+        # Save error information
+        error_log = experiment_dir / "error_log.txt"
+        with open(error_log, 'w') as f:
+            f.write(f"Error: {e}\n")
+            f.write(traceback.format_exc())
 
 if __name__ == "__main__":
     main()
