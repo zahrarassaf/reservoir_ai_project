@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import List
 import torch
 
 @dataclass
@@ -17,3 +18,9 @@ class TrainingConfig:
     seed: int = 42
     save_dir: str = "checkpoints"
     save_frequency: int = 10
+    
+    def get_optimizer_config(self):
+        return {
+            "lr": self.learning_rate,
+            "weight_decay": self.weight_decay
+        }
