@@ -14,10 +14,8 @@ class SPE9Loader(BaseReservoirLoader):
         self._total_cells = 24 * 25 * 15
         
     def _validate_paths(self) -> None:
-        if not self.config.opm_data_dir.exists():
-            raise FileNotFoundError(
-                f"OPM data directory not found: {self.config.opm_data_dir}"
-            )
+        self.config.validate_paths()
+        self.logger.info("All SPE9 data files validated successfully")
     
     def load_grid_geometry(self) -> Dict[str, np.ndarray]:
         nx, ny, nz = self._grid_dims
@@ -32,6 +30,8 @@ class SPE9Loader(BaseReservoirLoader):
                 'z': np.linspace(0, nz * 20, nz)
             }
         }
+        
+        self.logger.info(f"Loaded grid geometry: {nx}x{ny}x{nz} = {self._total_cells} cells")
         return geometry
     
     def _parse_eclipse_array(self, file_path: Path, array_name: str) -> np.ndarray:
@@ -58,19 +58,30 @@ class SPE9Loader(BaseReservoirLoader):
             values_array = np.array(values)
             
             if len(values_array) != self._total_cells:
-                self.logger.warning(f"Array size mismatch for {array_name}")
+                self.logger.warning(
+                    f"Array {array_name} size mismatch: "
+                    f"expected {self._total_cells}, got {len(values_array)}"
+                )
                 if len(values_array) < self._total_cells:
-                    values_array = np.pad(values_array, 
-                                        (0, self._total_cells - len(values_array)),
-                                        mode='edge')
+                    values_array = np.pad(
+                        values_array, 
+                        (0, self._total_cells - len(values_array)),
+                        mode='edge'
+                    )
                 else:
                     values_array = values_array[:self._total_cells]
             
             values_3d = values_array.reshape(self._grid_dims, order='F')
+            
+            self.logger.info(
+                f"Parsed {array_name}: shape {values_3d.shape}, "
+                f"range [{values_3d.min():.3f}, {values_3d.max():.3f}]"
+            )
+            
             return values_3d
             
         except Exception as e:
-            self.logger.error(f"Failed to parse {array_name}: {e}")
+            self.logger.error(f"Failed to parse {array_name} from {file_path}: {e}")
             raise
     
     def load_static_properties(self) -> Dict[str, np.ndarray]:
@@ -78,6 +89,8 @@ class SPE9Loader(BaseReservoirLoader):
         
         if not init_file.exists():
             raise FileNotFoundError(f"SPE9.INIT not found at {init_file}")
+        
+        self.logger.info(f"Loading static properties from {init_file}")
         
         properties = {}
         property_names = ['PORO', 'PERMX', 'PERMY', 'PERMZ']
@@ -88,6 +101,7 @@ class SPE9Loader(BaseReservoirLoader):
         properties['NTG'] = np.ones(self._grid_dims)
         properties['DEPTH'] = np.random.uniform(2000, 2500, self._grid_dims)
         
+        self.logger.info(f"Loaded static properties: {list(properties.keys())}")
         return properties
     
     def load_dynamic_properties(self, time_steps: Optional[List[int]] = None) -> Dict[str, np.ndarray]:
@@ -112,6 +126,7 @@ class SPE9Loader(BaseReservoirLoader):
             dynamic_data[time_key]['SWAT'] = np.clip(swat_base + swat_increase, 0.1, 0.8)
             dynamic_data[time_key]['SOIL'] = 1.0 - dynamic_data[time_key]['SWAT']
         
+        self.logger.info(f"Generated dynamic properties for {len(time_steps)} time steps")
         return dynamic_data
     
     def get_training_sequences(self) -> Tuple[np.ndarray, np.ndarray]:
@@ -163,7 +178,15 @@ class SPE9Loader(BaseReservoirLoader):
                         ]
                         target_seq.append(target_feat)
                     
-                    features.append(input_seq)
-                    targets.append(target_seq)
+                    if len(input_seq) == sequence_length and len(target_seq) == self.config.prediction_horizon:
+                        features.append(input_seq)
+                        targets.append(target_seq)
         
-        return np.array(features), np.array(targets)
+        features_array = np.array(features)
+        targets_array = np.array(targets)
+        
+        self.logger.info(
+            f"Created training sequences: {features_array.shape} -> {targets_array.shape}"
+        )
+        
+        return features_array, targets_array
