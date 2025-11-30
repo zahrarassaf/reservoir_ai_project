@@ -5,7 +5,7 @@ from .temporal_models import TemporalModel
 
 __all__ = [
     'BaseReservoirModel',
-    'PhysicsConstraintLayer', 
+    'PhysicsConstraintLayer',
     'ReservoirNN',
     'TemporalModel'
 ]
