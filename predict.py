@@ -1,140 +1,93 @@
-#!/usr/bin/env python3
-"""
-PRODUCTION PREDICTION PIPELINE
-LOAD TRAINED MODELS AND GENERATE PREDICTIONS
-"""
-import sys
+import logging
+import torch
 import numpy as np
-import pandas as pd
-import joblib
 from pathlib import Path
-import warnings
-warnings.filterwarnings('ignore')
 
-sys.path.insert(0, str(Path(__file__).parent))
+from config.data_config import DataConfig
+from config.model_config import TemporalModelConfig, EnsembleConfig
+from config.training_config import TrainingConfig
+from data.spe9_loader import SPE9Loader
+from ensemble.ensemble_trainer import EnsembleTrainer
+from utils.visualization import plot_uncertainty
+from utils.metrics import reservoir_metrics, calculate_forecast_accuracy
 
-from src.data_loader import ReservoirDataLoader
-from src.feature_engineer import ReservoirFeatureEngineer
-from src.evaluator import ModelEvaluator
-from src.config import config
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-class ReservoirPredictor:
-    """PRODUCTION PREDICTION SYSTEM"""
+def load_trained_ensemble(ensemble_path):
+    """Load trained ensemble model"""
+    ensemble_config = EnsembleConfig()
+    model_config = TemporalModelConfig()
+    training_config = TrainingConfig()
     
-    def __init__(self):
-        self.models = {}
-        self.load_models()
+    trainer = EnsembleTrainer(ensemble_config, model_config, training_config)
+    trainer.load_ensemble(ensemble_path)
     
-    def load_models(self):
-        """LOAD TRAINED MODELS"""
-        print("📂 LOADING TRAINED MODELS...")
-        
-        try:
-            # LOAD CNN-LSTM
-            from tensorflow.keras.models import load_model
-            model_path = config.MODELS_DIR / 'cnn_lstm_final.h5'
-            if model_path.exists():
-                self.models['cnn_lstm'] = load_model(model_path)
-                print("✅ CNN-LSTM model loaded")
-            
-            # LOAD ML MODELS
-            ml_models = ['random_forest', 'xgboost', 'lightgbm']
-            for model_name in ml_models:
-                model_path = config.MODELS_DIR / f'{model_name}_model.pkl'
-                if model_path.exists():
-                    self.models[model_name] = joblib.load(model_path)
-                    print(f"✅ {model_name} model loaded")
-            
-            print(f"🎯 {len(self.models)} MODELS LOADED SUCCESSFULLY")
-            
-        except Exception as e:
-            print(f"❌ ERROR LOADING MODELS: {e}")
-    
-    def predict(self, data: pd.DataFrame):
-        """GENERATE PREDICTIONS FOR NEW DATA"""
-        if not self.models:
-            print("❌ NO MODELS AVAILABLE - RUN TRAINING FIRST")
-            return None, None
-        
-        print("🔮 GENERATING PREDICTIONS...")
-        
-        # FEATURE ENGINEERING
-        feature_engineer = ReservoirFeatureEngineer()
-        X, y, feature_names, engineered_data = feature_engineer.prepare_features(data)
-        
-        if len(X) == 0:
-            print("❌ NO VALID SEQUENCES GENERATED")
-            return None, None
-        
-        # FLATTEN FOR ML MODELS
-        X_flat = X.reshape(X.shape[0], -1)
-        
-        predictions = {}
-        
-        # CNN-LSTM PREDICTIONS
-        if 'cnn_lstm' in self.models:
-            predictions['cnn_lstm'] = self.models['cnn_lstm'].predict(X, verbose=0).flatten()
-        
-        # ML MODEL PREDICTIONS
-        for name, model in self.models.items():
-            if name != 'cnn_lstm':
-                try:
-                    predictions[name] = model.predict(X_flat)
-                except Exception as e:
-                    print(f"⚠️ Prediction failed for {name}: {e}")
-        
-        return predictions, y
+    return trainer
 
 def main():
-    """MAIN PREDICTION EXECUTION"""
-    print("🚀 RESERVOIR AI - PRODUCTION PREDICTION PIPELINE")
-    print("=" * 60)
-    
-    # CHECK IF MODELS EXIST
-    model_files = list(config.MODELS_DIR.glob("*.h5")) + list(config.MODELS_DIR.glob("*.pkl"))
-    if not model_files:
-        print("❌ NO TRAINED MODELS FOUND")
-        print("💡 Run: python run_training.py first")
-        return
-    
     try:
-        # INITIALIZE PREDICTOR
-        predictor = ReservoirPredictor()
+        logger.info("🔮 Starting Prediction Pipeline")
         
-        if not predictor.models:
-            print("❌ FAILED TO LOAD MODELS")
-            return
+        # Load trained ensemble
+        ensemble_path = Path("checkpoints/trained_ensemble.pth")
+        if not ensemble_path.exists():
+            raise FileNotFoundError(f"Trained ensemble not found at {ensemble_path}")
         
-        # LOAD DATA
-        print("\n📥 LOADING PREDICTION DATA...")
-        loader = ReservoirDataLoader()
-        data = loader.load_data()
+        ensemble_trainer = load_trained_ensemble(ensemble_path)
+        logger.info(f"✅ Loaded ensemble with {len(ensemble_trainer.models)} models")
         
-        print(f"📊 PREDICTION DATA: {data.shape}")
+        # Load data for prediction
+        data_config = DataConfig()
+        data_loader = SPE9Loader(data_config)
         
-        # GENERATE PREDICTIONS
-        print("\n🔮 GENERATING PREDICTIONS...")
-        predictions, actual = predictor.predict(data)
+        # Generate test sequences
+        features, targets = data_loader.get_training_sequences()
         
-        if predictions is None:
-            return
+        # Convert to tensor
+        features_tensor = torch.FloatTensor(features)
+        targets_tensor = torch.FloatTensor(targets)
         
-        # EVALUATE PREDICTIONS
-        print("\n📊 EVALUATING PREDICTIONS...")
-        evaluator = ModelEvaluator()
-        results_df = evaluator.evaluate_predictions(predictions, actual)
-        evaluator.print_performance_summary(results_df)
+        # Make predictions
+        logger.info("🎯 Making ensemble predictions...")
+        predictions = ensemble_trainer.predict_ensemble(features_tensor)
         
-        # SAVE RESULTS
-        from src.utils import save_predictions
-        save_predictions(predictions, actual, "production_predictions.csv")
-        evaluator.save_evaluation_results(results_df, "production_performance.csv")
+        # Calculate metrics
+        metrics = reservoir_metrics(
+            predictions['mean'].detach().numpy(),
+            targets_tensor.numpy()
+        )
         
-        print(f"\n✅ PREDICTION PIPELINE COMPLETED!")
-        print(f"📁 Results saved to: {config.RESULTS_DIR}")
+        forecast_metrics = calculate_forecast_accuracy(
+            predictions['mean'].detach().numpy(),
+            targets_tensor.numpy()
+        )
+        
+        # Log results
+        logger.info("📊 Prediction Results:")
+        for metric, value in metrics.items():
+            logger.info(f"  {metric}: {value:.4f}")
+        
+        for metric, value in forecast_metrics.items():
+            logger.info(f"  {metric}: {value:.4f}")
+        
+        # Plot uncertainty
+        plot_uncertainty(predictions, targets_tensor)
+        
+        # Save predictions
+        output_dir = Path("predictions")
+        output_dir.mkdir(exist_ok=True)
+        
+        np.save(output_dir / "predictions_mean.npy", predictions['mean'].detach().numpy())
+        np.save(output_dir / "predictions_std.npy", predictions['std'].detach().numpy())
+        np.save(output_dir / "targets.npy", targets_tensor.numpy())
+        
+        logger.info(f"💾 Predictions saved to: {output_dir}")
+        logger.info("✅ Prediction completed successfully!")
         
     except Exception as e:
-        print(f"❌ PREDICTION FAILED: {e}")
+        logger.error(f"❌ Prediction failed: {e}")
+        raise
 
 if __name__ == "__main__":
     main()
