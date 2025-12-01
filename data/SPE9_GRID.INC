@@ -1,5 +1,5 @@
 -- Grid geometry for SPE9
--- 24x25x15 grid with 10-degree dip in x-direction
+-- Cartesian grid with 10-degree dip in x-direction
 
 DX
 9000*300 /
@@ -24,19 +24,22 @@ DZ
 600*50  / -- Layer 14
 600*100 / -- Layer 15
 
-TOPS
+-- TOPS will be included from external file
 INCLUDE
 'TOPSVALUES.DATA' /
 
+-- Permeability will be included from external file
 PERMX
 INCLUDE
 'PERMVALUES.DATA' /
 
+-- Set permeability in Y and Z directions
 COPY
 PERMX PERMY /
 PERMX PERMZ /
 /
 
+-- Vertical permeability is 1% of horizontal
 MULTIPLY
 PERMZ 0.01 /
 /
