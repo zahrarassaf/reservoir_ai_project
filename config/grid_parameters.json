@@ -1,4 +1,8 @@
 {
+  "metadata": {
+    "simulation": "SPE9",
+    "description": "Grid parameters for SPE9 benchmark"
+  },
   "grid_dimensions": {
     "nx": 24,
     "ny": 25,
@@ -30,12 +34,18 @@
   "permeability": {
     "kx_source": "PERMVALUES.DATA",
     "ky_multiplier": 1.0,
-    "kz_multiplier": 0.01
+    "kz_multiplier": 0.01,
+    "description": "Vertical permeability is 1% of horizontal"
   },
   "depth_structure": {
-    "reference_cell": {"i": 1, "j": 1, "k": 1},
+    "reference_cell": {
+      "i": 1,
+      "j": 1,
+      "k": 1
+    },
     "reference_depth": 9000,
     "dip_angle": 10,
-    "dip_direction": "x"
+    "dip_direction": "x",
+    "description": "10-degree dip in x-direction, no dip in y-direction"
   }
 }
