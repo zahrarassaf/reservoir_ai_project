@@ -1,0 +1,41 @@
+{
+  "grid_dimensions": {
+    "nx": 24,
+    "ny": 25,
+    "nz": 15,
+    "total_cells": 9000
+  },
+  "cell_dimensions": {
+    "dx": 300,
+    "dy": 300,
+    "dz": [20, 15, 26, 15, 16, 14, 8, 8, 18, 12, 19, 18, 20, 50, 100]
+  },
+  "porosity": {
+    "layer_1": 0.087,
+    "layer_2": 0.097,
+    "layer_3": 0.111,
+    "layer_4": 0.160,
+    "layer_5": 0.130,
+    "layer_6": 0.170,
+    "layer_7": 0.170,
+    "layer_8": 0.080,
+    "layer_9": 0.140,
+    "layer_10": 0.130,
+    "layer_11": 0.120,
+    "layer_12": 0.105,
+    "layer_13": 0.120,
+    "layer_14": 0.116,
+    "layer_15": 0.157
+  },
+  "permeability": {
+    "kx_source": "PERMVALUES.DATA",
+    "ky_multiplier": 1.0,
+    "kz_multiplier": 0.01
+  },
+  "depth_structure": {
+    "reference_cell": {"i": 1, "j": 1, "k": 1},
+    "reference_depth": 9000,
+    "dip_angle": 10,
+    "dip_direction": "x"
+  }
+}
