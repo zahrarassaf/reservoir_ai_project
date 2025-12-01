@@ -5,7 +5,7 @@
 ### 1. Installation
 ```bash
 # Clone repository
-git clone https://github.com/your-username/spe9-simulation.git
+git clone https://github.com/Zahrarasaf/spe9-simulation.git
 cd spe9-simulation
 
 # Create environment
