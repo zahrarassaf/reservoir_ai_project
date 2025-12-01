@@ -4,6 +4,7 @@ simulation:
   name: "SPE9_Benchmark"
   version: "1.0.0"
   description: "9th SPE Comparative Solution Project"
+  author: "Zahra Rasaf"
   
 grid:
   dimensions: [24, 25, 15]
