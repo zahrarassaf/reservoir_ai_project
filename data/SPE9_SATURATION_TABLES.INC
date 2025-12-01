@@ -1,4 +1,6 @@
+-- Saturation tables for SPE9
 -- Gas-Oil relative permeability and capillary pressure
+
 SGOF
 0.00000  0.00000  1.00000  0.00 /
 0.04000  0.00000  0.60000  0.20 /
