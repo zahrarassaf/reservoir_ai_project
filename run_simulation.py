@@ -385,14 +385,14 @@ def load_configurations():
             # Load YAML files
             for yaml_file in config_dir.glob("*.yaml"):
                 try:
-                    with open(yaml_file, 'r') as f:
+                    with open(yaml_file, 'r', encoding='utf-8') as f:  # ✅ اضافه کردن encoding
                         configs[yaml_file.stem] = yaml.safe_load(f)
                 except:
                     pass
             
             for yaml_file in config_dir.glob("*.yml"):
                 try:
-                    with open(yaml_file, 'r') as f:
+                    with open(yaml_file, 'r', encoding='utf-8') as f:  # ✅ اضافه کردن encoding
                         configs[yaml_file.stem] = yaml.safe_load(f)
                 except:
                     pass
@@ -402,7 +402,7 @@ def load_configurations():
         # Load JSON files
         for json_file in config_dir.glob("*.json"):
             try:
-                with open(json_file, 'r') as f:
+                with open(json_file, 'r', encoding='utf-8') as f:  # ✅ اضافه کردن encoding
                     configs[json_file.stem] = json.load(f)
             except:
                 pass
@@ -428,13 +428,13 @@ def save_results_comprehensive(results, metrics, plots_count):
     
     # 1. Save simulation results
     results_file = data_dir / f"simulation_results_{timestamp}.json"
-    with open(results_file, 'w') as f:
+    with open(results_file, 'w', encoding='utf-8') as f:  # ✅ اضافه کردن encoding='utf-8'
         json.dump(results, f, indent=2, default=float)
     logger.info(f"💾 Results saved: {results_file}")
     
     # 2. Save metrics
     metrics_file = data_dir / f"performance_metrics_{timestamp}.json"
-    with open(metrics_file, 'w') as f:
+    with open(metrics_file, 'w', encoding='utf-8') as f:  # ✅ اضافه کردن encoding='utf-8'
         json.dump(metrics, f, indent=2, default=str)
     logger.info(f"📊 Metrics saved: {metrics_file}")
     
@@ -453,13 +453,13 @@ def save_results_comprehensive(results, metrics, plots_count):
     }
     
     metadata_file = data_dir / f"metadata_{timestamp}.json"
-    with open(metadata_file, 'w') as f:
+    with open(metadata_file, 'w', encoding='utf-8') as f:  # ✅ اضافه کردن encoding='utf-8'
         json.dump(metadata, f, indent=2)
     
     # 4. Generate comprehensive report
     report_file = reports_dir / f"simulation_report_{timestamp}.md"
     
-    with open(report_file, 'w') as f:
+    with open(report_file, 'w', encoding='utf-8') as f:  # ✅ اضافه کردن encoding='utf-8'
         f.write("# 🏭 Reservoir Simulation Report\n\n")
         f.write(f"**Generated:** {datetime.now():%Y-%m-%d %H:%M:%S}\n\n")
         
@@ -533,7 +533,7 @@ def save_results_comprehensive(results, metrics, plots_count):
     
     # 5. Create success marker
     success_file = results_dir / "SIMULATION_SUCCESS.txt"
-    with open(success_file, 'w') as f:
+    with open(success_file, 'w', encoding='utf-8') as f:  # ✅ اضافه کردن encoding='utf-8'
         f.write("="*60 + "\n")
         f.write("RESERVOIR SIMULATION - SUCCESSFUL COMPLETION\n")
         f.write("="*60 + "\n\n")
