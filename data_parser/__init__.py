@@ -1,2 +1,7 @@
+"""
+Data parser package for reservoir simulation.
+"""
 
-echo "from .spe9_parser import SPE9ProjectParser, WellSpecification" > data_parser/__init__.py
+from .spe9_parser import SPE9ProjectParser
+
+__all__ = ['SPE9ProjectParser']
