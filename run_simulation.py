@@ -23,7 +23,7 @@ def setup_logging():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = log_dir / f"simulation_{timestamp}.log"
     
-    # FIXED: Changed datefmt from '%Y-%m-d' to '%Y-%m-%d'
+    # ✅ CORRECT: %d not d - FIXED DATE FORMAT
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
