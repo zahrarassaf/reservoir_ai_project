@@ -1,6 +1,6 @@
 """
-Reservoir AI Simulation Framework - Main Entry Point
-Professional-grade reservoir simulation with machine learning integration.
+Reservoir AI Simulation Framework - Professional Implementation
+Main entry point for SPE9 reservoir simulation with AI components.
 """
 
 import sys
@@ -9,249 +9,271 @@ import logging
 from pathlib import Path
 from datetime import datetime
 import numpy as np
+import json
+import yaml
 from typing import Dict, Any, Optional
 
-# Add project root to path
-project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
+# Configure absolute imports
+PROJECT_ROOT = Path(__file__).parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
-# Configure logging
-def setup_logging(log_level: str = "INFO") -> logging.Logger:
-    """Configure professional logging system."""
-    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    date_format = '%Y-%m-%d %H:%M:%S'
+# Import project modules
+try:
+    from data_parser.spe9_parser import SPE9ProjectParser
+    from src.simulation_runner import ReservoirSimulationRunner
+    from src.data_validator import DataValidator
+    from src.results_processor import ResultsProcessor
+    from analysis.performance_calculator import PerformanceCalculator
+    from analysis.plot_generator import PlotGenerator
+    HAS_ALL_MODULES = True
+except ImportError as e:
+    print(f"Import error: {e}")
+    HAS_ALL_MODULES = False
+
+def setup_logging() -> logging.Logger:
+    """Setup professional logging configuration."""
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"simulation_{timestamp}.log"
     
     logging.basicConfig(
-        level=getattr(logging, log_level.upper()),
-        format=log_format,
-        datefmt=date_format,
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler(f'simulation_{datetime.now():%Y%m%d_%H%M%S}.log')
+            logging.FileHandler(log_file, encoding='utf-8')
         ]
     )
     
     logger = logging.getLogger(__name__)
-    logger.info(f"Logging initialized at {log_level} level")
+    logger.info(f"Logging initialized. Log file: {log_file}")
     
     return logger
 
-# Import project modules after path configuration
-try:
-    from data_parser.spe9_parser import SPE9DataParser, create_spe9_parser
-    HAS_SPE9_PARSER = True
-except ImportError as e:
-    logging.warning(f"SPE9 parser not available: {e}")
-    HAS_SPE9_PARSER = False
+def load_configurations() -> Dict[str, Any]:
+    """Load all configuration files."""
+    config_dir = Path("config")
+    configs = {}
+    
+    # Load simulation configuration
+    sim_config_path = config_dir / "simulation_config.yaml"
+    if sim_config_path.exists():
+        with open(sim_config_path, 'r') as f:
+            configs['simulation'] = yaml.safe_load(f)
+    
+    # Load grid parameters
+    grid_config_path = config_dir / "grid_parameters.json"
+    if grid_config_path.exists():
+        with open(grid_config_path, 'r') as f:
+            configs['grid'] = json.load(f)
+    
+    # Load well controls
+    well_config_path = config_dir / "well_controls.json"
+    if well_config_path.exists():
+        with open(well_config_path, 'r') as f:
+            configs['wells'] = json.load(f)
+    
+    return configs
 
-from models.reservoir_model import ReservoirModel
-from analysis.performance_calculator import PerformanceCalculator
-from analysis.plot_generator import PlotGenerator
-
-def validate_data_files(logger: logging.Logger) -> bool:
-    """
-    Validate existence of required data files.
-    Returns True if validation passes or can be recovered.
-    """
-    required_files = [
-        'data/well_locations.txt',
-        'data/grid_tops.txt',
-        'data/permeability.txt',
-        'data/sgof_table.txt'
-    ]
-    
-    missing_files = []
-    for file_path in required_files:
-        if not Path(file_path).exists():
-            missing_files.append(file_path)
-    
-    if missing_files:
-        logger.warning(f"Missing {len(missing_files)} required data files")
-        
-        # Check if SPE9.DATA exists and we can parse it
-        spe9_file = Path("data/SPE9.DATA")
-        if spe9_file.exists() and HAS_SPE9_PARSER:
-            logger.info("SPE9.DATA found. Attempting to extract required data...")
-            try:
-                parser = create_spe9_parser(str(spe9_file))
-                exported_files = parser.export_to_project_format('data')
-                
-                if len(exported_files) >= 3:  # At least wells, permeability, tops
-                    logger.info("Successfully extracted data from SPE9.DATA")
-                    return True
-                else:
-                    logger.error("Insufficient data extracted from SPE9.DATA")
-                    return False
-            except Exception as e:
-                logger.error(f"Failed to parse SPE9.DATA: {e}")
-                return False
-        else:
-            logger.error("SPE9.DATA not found or parser unavailable")
-            logger.error(f"Missing files: {missing_files}")
-            return False
-    
-    logger.info("All required data files validated successfully")
-    return True
-
-def load_simulation_data(logger: logging.Logger) -> Optional[Dict[str, Any]]:
-    """Load and prepare simulation data with robust error handling."""
-    
-    def safe_load_txt(filepath: str, delimiter: str = ',', skip_header: int = 0) -> np.ndarray:
-        """Safely load text file with various formats."""
-        try:
-            if Path(filepath).exists():
-                data = np.loadtxt(filepath, delimiter=delimiter, skiprows=skip_header)
-                logger.debug(f"Loaded {data.shape} from {filepath}")
-                return data
-            else:
-                raise FileNotFoundError(f"File not found: {filepath}")
-        except Exception as e:
-            logger.error(f"Error loading {filepath}: {e}")
-            # Return empty array to prevent crash
-            return np.array([])
-    
+def parse_real_data(logger: logging.Logger) -> Optional[Dict[str, Any]]:
+    """Parse real SPE9 data files."""
     try:
-        # Load well data
-        well_data = safe_load_txt('data/well_locations.txt')
-        if well_data.size == 0:
-            raise ValueError("No well data loaded")
+        logger.info("Starting real SPE9 data parsing...")
         
-        # Load grid data
-        tops_data = safe_load_txt('data/grid_tops.txt')
-        perm_data = safe_load_txt('data/permeability.txt')
-        sgof_data = safe_load_txt('data/sgof_table.txt')
+        parser = SPE9ProjectParser(data_dir="data")
+        parsed_data = parser.parse_all()
         
-        # Validate data shapes
-        if tops_data.size == 0:
-            logger.warning("TOPS data is empty, using default grid")
-            tops_data = np.random.uniform(8000, 8500, 100)
+        # Validate data
+        validator = DataValidator(parsed_data.get_simulation_data())
+        if not validator.validate():
+            logger.error("Data validation failed")
+            return None
         
-        if perm_data.size == 0:
-            logger.warning("Permeability data is empty, using default values")
-            perm_data = np.random.lognormal(mean=3.0, sigma=1.0, size=100)
+        # Export for simulation
+        exported_files = parser.export_for_simulation("data/processed")
         
-        # Prepare data dictionary
-        simulation_data = {
-            'wells': well_data,
-            'grid_tops': tops_data,
-            'permeability': perm_data,
-            'sgof_table': sgof_data,
-            'metadata': {
-                'timestamp': datetime.now().isoformat(),
-                'well_count': len(well_data),
-                'grid_size': len(tops_data)
-            }
-        }
+        logger.info("✅ Real SPE9 data parsed successfully")
+        logger.info(f"Grid: {parsed_data.grid_dimensions}")
+        logger.info(f"Wells: {len(parsed_data.wells)}")
         
-        logger.info(f"Loaded simulation data: {simulation_data['metadata']}")
-        return simulation_data
+        return parsed_data.get_simulation_data()
         
     except Exception as e:
-        logger.error(f"Critical error loading simulation data: {e}")
+        logger.error(f"Failed to parse real data: {e}", exc_info=True)
         return None
 
-def run_simulation_pipeline(data: Dict[str, Any], logger: logging.Logger) -> bool:
-    """Execute complete simulation pipeline."""
+def run_comprehensive_simulation(data: Dict[str, Any], 
+                                 configs: Dict[str, Any],
+                                 logger: logging.Logger) -> bool:
+    """Run comprehensive simulation pipeline."""
     
     try:
-        logger.info("Initializing reservoir model...")
-        
-        # Initialize model
-        reservoir_model = ReservoirModel(
-            grid_tops=data['grid_tops'],
-            permeability=data['permeability'],
-            well_data=data['wells']
+        # Initialize simulation runner
+        logger.info("Initializing simulation runner...")
+        runner = ReservoirSimulationRunner(
+            reservoir_data=data,
+            simulation_config=configs.get('simulation', {}),
+            grid_config=configs.get('grid', {})
         )
         
-        # Run simulation steps
+        # Run simulation
         logger.info("Running reservoir simulation...")
-        simulation_results = reservoir_model.run_simulation(
-            time_steps=100,
-            output_frequency=10
-        )
+        simulation_results = runner.run()
+        
+        if simulation_results is None:
+            logger.error("Simulation failed to produce results")
+            return False
+        
+        # Process results
+        logger.info("Processing simulation results...")
+        processor = ResultsProcessor(simulation_results)
+        processed_results = processor.process_all()
         
         # Calculate performance metrics
         logger.info("Calculating performance metrics...")
-        performance_calculator = PerformanceCalculator(simulation_results)
-        metrics = performance_calculator.calculate_all_metrics()
+        calculator = PerformanceCalculator(processed_results)
+        metrics = calculator.calculate_comprehensive_metrics()
         
-        # Generate visualizations
-        logger.info("Generating analysis plots...")
-        plot_generator = PlotGenerator(simulation_results, metrics)
-        
-        # Create comprehensive plot suite
-        plots = {
-            'performance': plot_generator.plot_performance_metrics(),
-            'reservoir': plot_generator.plot_reservoir_properties(),
-            'wells': plot_generator.plot_well_performance(),
-            'saturation': plot_generator.plot_saturation_distribution()
-        }
-        
-        # Save plots
-        for plot_name, fig in plots.items():
-            if fig is not None:
-                plot_path = f"results/{plot_name}_plot_{datetime.now():%Y%m%d_%H%M%S}.png"
-                fig.savefig(plot_path, dpi=300, bbox_inches='tight')
-                logger.info(f"Saved plot: {plot_path}")
-        
-        # Generate report
-        report_path = f"results/simulation_report_{datetime.now():%Y%m%d_%H%M%S}.txt"
-        with open(report_path, 'w') as f:
-            f.write(f"Reservoir Simulation Report\n")
-            f.write(f"Generated: {datetime.now():%Y-%m-%d %H:%M:%S}\n")
-            f.write(f"\nPerformance Metrics:\n")
-            for key, value in metrics.items():
-                f.write(f"  {key}: {value:.4f}\n")
-        
-        logger.info(f"Simulation completed successfully. Report: {report_path}")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Simulation pipeline failed: {e}")
-        return False
-
-def main():
-    """Main execution function with comprehensive error handling."""
-    
-    # Setup
-    logger = setup_logging("INFO")
-    logger.info("=" * 60)
-    logger.info("Reservoir AI Simulation Framework - Starting")
-    logger.info("=" * 60)
-    
-    try:
-        # Validate data
-        if not validate_data_files(logger):
-            logger.error("Data validation failed. Exiting.")
-            return 1
-        
-        # Load data
-        simulation_data = load_simulation_data(logger)
-        if simulation_data is None:
-            logger.error("Failed to load simulation data. Exiting.")
-            return 1
-        
-        # Create results directory
+        # Save metrics
         results_dir = Path("results")
         results_dir.mkdir(exist_ok=True)
         
-        # Run simulation
-        success = run_simulation_pipeline(simulation_data, logger)
+        metrics_file = results_dir / f"metrics_{datetime.now():%Y%m%d_%H%M%S}.json"
+        with open(metrics_file, 'w') as f:
+            json.dump(metrics, f, indent=2, default=float)
+        
+        logger.info(f"Performance metrics saved to: {metrics_file}")
+        
+        # Generate visualizations
+        logger.info("Generating analysis plots...")
+        plot_generator = PlotGenerator(processed_results, metrics)
+        
+        # Generate and save all plots
+        plot_files = []
+        plots_to_generate = [
+            ('reservoir_properties', plot_generator.plot_reservoir_properties),
+            ('well_performance', plot_generator.plot_well_performance),
+            ('production_forecast', plot_generator.plot_production_forecast),
+            ('saturation_distribution', plot_generator.plot_saturation_distribution),
+            ('pressure_contour', plot_generator.plot_pressure_contour),
+            ('recovery_factors', plot_generator.plot_recovery_factors)
+        ]
+        
+        for plot_name, plot_func in plots_to_generate:
+            try:
+                fig = plot_func()
+                if fig is not None:
+                    plot_path = results_dir / f"{plot_name}_{datetime.now():%Y%m%d_%H%M%S}.png"
+                    fig.savefig(plot_path, dpi=300, bbox_inches='tight')
+                    plot_files.append(plot_path)
+                    logger.info(f"Generated plot: {plot_path}")
+            except Exception as e:
+                logger.warning(f"Failed to generate {plot_name} plot: {e}")
+        
+        # Generate comprehensive report
+        report_path = generate_final_report(processed_results, metrics, plot_files, logger)
+        
+        logger.info("=" * 60)
+        logger.info("SIMULATION COMPLETED SUCCESSFULLY")
+        logger.info(f"Results directory: {results_dir}")
+        logger.info(f"Final report: {report_path}")
+        logger.info("=" * 60)
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Simulation pipeline failed: {e}", exc_info=True)
+        return False
+
+def generate_final_report(results: Dict[str, Any], 
+                          metrics: Dict[str, Any],
+                          plot_files: list,
+                          logger: logging.Logger) -> Path:
+    """Generate comprehensive final report."""
+    
+    report_dir = Path("reports")
+    report_dir.mkdir(exist_ok=True)
+    
+    report_path = report_dir / f"simulation_report_{datetime.now():%Y%m%d_%H%M%S}.md"
+    
+    with open(report_path, 'w') as f:
+        f.write("# Reservoir Simulation Report\n\n")
+        f.write(f"**Generated:** {datetime.now():%Y-%m-%d %H:%M:%S}\n\n")
+        
+        f.write("## Executive Summary\n\n")
+        f.write(f"- Total simulation time: {metrics.get('total_time', 'N/A')} days\n")
+        f.write(f"- Final oil recovery: {metrics.get('recovery_factor', {}).get('oil', 0)*100:.1f}%\n")
+        f.write(f"- Number of wells: {len(results.get('well_data', []))}\n\n")
+        
+        f.write("## Key Performance Indicators\n\n")
+        f.write("| Metric | Value | Unit |\n")
+        f.write("|--------|-------|------|\n")
+        
+        for key, value in metrics.items():
+            if isinstance(value, dict):
+                for subkey, subvalue in value.items():
+                    if isinstance(subvalue, (int, float)):
+                        f.write(f"| {key}.{subkey} | {subvalue:.4f} | - |\n")
+            elif isinstance(value, (int, float)):
+                f.write(f"| {key} | {value:.4f} | - |\n")
+        
+        f.write("\n## Generated Visualizations\n\n")
+        for plot_file in plot_files:
+            f.write(f"- `{plot_file.name}`\n")
+        
+        f.write("\n## Data Summary\n\n")
+        f.write(f"- Grid dimensions: {results.get('grid_dimensions', 'N/A')}\n")
+        f.write(f"- Timesteps simulated: {len(results.get('time_steps', []))}\n")
+        f.write(f"- Final simulation date: {results.get('final_date', 'N/A')}\n")
+    
+    logger.info(f"Generated final report: {report_path}")
+    return report_path
+
+def main():
+    """Main execution function."""
+    
+    # Setup logging
+    logger = setup_logging()
+    
+    logger.info("=" * 70)
+    logger.info("RESERVOIR AI SIMULATION FRAMEWORK - SPE9 REAL DATA")
+    logger.info("=" * 70)
+    
+    # Check module availability
+    if not HAS_ALL_MODULES:
+        logger.error("Missing required modules. Please check imports.")
+        return 1
+    
+    try:
+        # Step 1: Load configurations
+        logger.info("Step 1: Loading configurations...")
+        configs = load_configurations()
+        
+        # Step 2: Parse real SPE9 data
+        logger.info("Step 2: Parsing real SPE9 data...")
+        simulation_data = parse_real_data(logger)
+        
+        if simulation_data is None:
+            logger.error("Failed to parse simulation data. Exiting.")
+            return 1
+        
+        # Step 3: Run simulation
+        logger.info("Step 3: Running comprehensive simulation...")
+        success = run_comprehensive_simulation(simulation_data, configs, logger)
         
         if success:
-            logger.info("=" * 60)
-            logger.info("SIMULATION COMPLETED SUCCESSFULLY")
-            logger.info("=" * 60)
             return 0
         else:
-            logger.error("SIMULATION FAILED")
             return 1
             
     except KeyboardInterrupt:
         logger.info("Simulation interrupted by user")
         return 130
     except Exception as e:
-        logger.error(f"Unexpected error in main execution: {e}", exc_info=True)
+        logger.error(f"Critical error in main execution: {e}", exc_info=True)
         return 1
 
 if __name__ == "__main__":
