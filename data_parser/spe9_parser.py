@@ -1,485 +1,205 @@
 """
-SPE9.DATA Parser - Optimized for your project structure.
-Handles multiple data files: SPE9.DATA, PERMVALUES.DATA, TOPSVALUES.DATA, etc.
+Enhanced SPE9 Parser - Reads ALL real data
 """
 
-import re
 import numpy as np
+import re
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
-import logging
-import yaml
-import json
-from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
-
-@dataclass
-class WellSpecification:
-    """Well specification for SPE9 dataset."""
-    name: str
-    i_location: int
-    j_location: int
-    k_location: int
-    well_type: str  # 'INJECTOR' or 'PRODUCER'
-    phase: str = 'OIL'
-    control_mode: str = 'RATE'
+class EnhancedSPE9Parser:
+    """Parse ALL SPE9 data files correctly."""
     
-    def to_dict(self):
-        return {
-            'name': self.name,
-            'i': self.i_location,
-            'j': self.j_location,
-            'k': self.k_location,
-            'type': self.well_type,
-            'phase': self.phase,
-            'control': self.control_mode
-        }
-
-class SPE9ProjectParser:
-    """
-    Parser for SPE9 project with multiple data files.
-    
-    Handles:
-    - SPE9.DATA (main simulation deck)
-    - PERMVALUES.DATA (permeability values)
-    - TOPSVALUES.DATA (grid tops)
-    - INC files (grid, porosity, PVT, saturation tables)
-    - JSON/YAML config files
-    """
-    
-    def __init__(self, data_dir: str = "data"):
+    def __init__(self, data_dir="data"):
         self.data_dir = Path(data_dir)
-        self.spe9_data_path = self.data_dir / "SPE9.DATA"
-        
-        # Check which files actually exist
-        self.files = {
-            'grid_inc': self.data_dir / "SPE9_GRID.INC",
-            'poro_inc': self.data_dir / "SPE9_PORO.INC",
-            'pvt_inc': self.data_dir / "SPE9_PVT.INC",
-            'sat_inc': self.data_dir / "SPE9_SATURATION_TABLES.INC",
-            'perm_values': self.data_dir / "PERMVALUES.DATA",
-            'tops_values': self.data_dir / "TOPSVALUES.DATA"
-        }
-        
-        # Configuration paths
-        self.config_dir = Path("config")
-        self.config_files = {
-            'grid': self.config_dir / "grid_parameters.json",
-            'sim': self.config_dir / "simulation_config.yaml",
-            'wells': self.config_dir / "well_controls.json"
-        }
-        
-        # Parsed data
-        self.wells: List[WellSpecification] = []
-        self.grid_dimensions: Tuple[int, int, int] = (24, 25, 15)  # Default SPE9
-        self.permeability: Optional[np.ndarray] = None
-        self.porosity: Optional[np.ndarray] = None
-        self.tops: Optional[np.ndarray] = None
-        self.pvt_tables: Dict[str, Any] = {}
-        self.saturation_tables: Dict[str, Any] = {}
-        
-        # Load configurations
-        self.configs = self._load_configs()
+        self.logger = logging.getLogger(__name__)
     
-    def _load_configs(self) -> Dict[str, Any]:
-        """Load all configuration files."""
-        configs = {}
+    def parse_all(self):
+        """Parse ALL SPE9 files."""
+        data = {}
         
-        for name, path in self.config_files.items():
-            if path.exists():
-                try:
-                    if path.suffix == '.json':
-                        with open(path, 'r') as f:
-                            configs[name] = json.load(f)
-                    elif path.suffix in ['.yaml', '.yml']:
-                        with open(path, 'r') as f:
-                            configs[name] = yaml.safe_load(f)
-                    logger.info(f"Loaded config: {name}")
-                except Exception as e:
-                    logger.warning(f"Failed to load config {path}: {e}")
-            else:
-                logger.warning(f"Config file not found: {path}")
+        # 1. Parse main DATA file
+        data.update(self._parse_spe9_data())
         
-        return configs
-    
-    def parse_all(self) -> 'SPE9ProjectParser':
-        """Parse all available data files."""
-        logger.info("Starting SPE9 project parsing...")
+        # 2. Parse grid properties
+        data.update(self._parse_grid_files())
         
-        # Parse main SPE9.DATA file
-        self._parse_spe9_data()
+        # 3. Parse rock properties
+        data.update(self._parse_rock_properties())
         
-        # Parse other files if they exist
-        for file_type, path in self.files.items():
-            if path.exists():
-                try:
-                    if 'grid' in file_type:
-                        self._parse_grid_inc(path)
-                    elif 'poro' in file_type:
-                        self._parse_porosity_inc(path)
-                    elif 'pvt' in file_type:
-                        self._parse_pvt_inc(path)
-                    elif 'sat' in file_type:
-                        self._parse_saturation_tables_inc(path)
-                    elif 'perm' in file_type:
-                        self._parse_permeability_values(path)
-                    elif 'tops' in file_type:
-                        self._parse_tops_values(path)
-                except Exception as e:
-                    logger.warning(f"Failed to parse {path}: {e}")
+        # 4. Parse fluid properties
+        data.update(self._parse_fluid_properties())
         
-        # Set defaults if data missing
-        self._set_defaults_if_needed()
-        
-        # Validate
-        self._validate_data_consistency()
-        
-        logger.info(f"Parsing complete: {len(self.wells)} wells")
-        return self
+        return data
     
     def _parse_spe9_data(self):
-        """Parse main SPE9.DATA file."""
-        if not self.spe9_data_path.exists():
-            logger.error(f"SPE9.DATA not found at {self.spe9_data_path}")
-            return
+        """Parse SPE9.DATA - the main simulation file."""
+        data_file = self.data_dir / "SPE9.DATA"
         
-        logger.info(f"Parsing {self.spe9_data_path}")
+        if not data_file.exists():
+            raise FileNotFoundError(f"SPE9.DATA not found: {data_file}")
         
-        try:
-            with open(self.spe9_data_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-            
-            # Extract DIMENS
-            dimens_match = re.search(r'DIMENS\s+(\d+)\s+(\d+)\s+(\d+)', content, re.IGNORECASE)
-            if dimens_match:
-                self.grid_dimensions = (
-                    int(dimens_match.group(1)),
-                    int(dimens_match.group(2)),
-                    int(dimens_match.group(3))
-                )
-                logger.info(f"Grid dimensions: {self.grid_dimensions}")
-            
-            # Extract WELSPECS
-            welspecs_pattern = r'WELSPECS\s*(.*?)(?=\s*/\s*|\n\s*[A-Z]+\s*$|\Z)'
-            welspecs_match = re.search(welspecs_pattern, content, re.DOTALL | re.IGNORECASE)
-            if welspecs_match:
-                self._parse_welspecs(welspecs_match.group(1))
-            
-            # Extract other sections if needed
-            self._extract_other_sections(content)
-            
-        except Exception as e:
-            logger.error(f"Error parsing SPE9.DATA: {e}")
-    
-    def _parse_welspecs(self, content: str):
-        """Parse WELSPECS section."""
-        lines = [line.strip() for line in content.split('\n') if line.strip()]
-        
-        for line in lines:
-            # Remove comments
-            if '--' in line:
-                line = line.split('--')[0].strip()
-            
-            # Split by whitespace, handling quoted strings
-            parts = []
-            current = ''
-            in_quotes = False
-            quote_char = ''
-            
-            for char in line:
-                if char in ['\'', '"']:
-                    if not in_quotes:
-                        in_quotes = True
-                        quote_char = char
-                        current += char
-                    elif char == quote_char:
-                        in_quotes = False
-                        quote_char = ''
-                        current += char
-                    else:
-                        current += char
-                elif char == ' ' and not in_quotes:
-                    if current:
-                        parts.append(current)
-                        current = ''
-                else:
-                    current += char
-            
-            if current:
-                parts.append(current)
-            
-            if len(parts) >= 5:
-                # Remove quotes from well name
-                well_name = parts[0].strip('\'"')
-                
-                # Determine well type
-                well_type = 'PRODUCER'
-                if well_name.upper().startswith(('I', 'INJ', 'W')):
-                    well_type = 'INJECTOR'
-                
-                try:
-                    well = WellSpecification(
-                        name=well_name,
-                        i_location=int(float(parts[1])),
-                        j_location=int(float(parts[2])),
-                        k_location=int(float(parts[3])),
-                        well_type=well_type,
-                        phase=parts[4].strip('\'"').upper()
-                    )
-                    
-                    self.wells.append(well)
-                    logger.debug(f"Parsed well: {well.name} ({well.well_type}) at ({well.i_location},{well.j_location},{well.k_location})")
-                    
-                except (ValueError, IndexError) as e:
-                    logger.warning(f"Skipping invalid well data: {line} - {e}")
-    
-    def _extract_other_sections(self, content: str):
-        """Extract other important sections."""
-        # Add extraction for PERMX, PORO, etc. if in main file
-        pass
-    
-    def _parse_grid_inc(self, path: Path):
-        """Parse grid include file."""
-        logger.info(f"Parsing grid from {path}")
-        
-        with open(path, 'r') as f:
+        with open(data_file, 'r') as f:
             content = f.read()
         
-        # Look for SPECGRID or COORD
-        specgrid_match = re.search(r'SPECGRID\s+(\d+)\s+(\d+)\s+(\d+)', content, re.IGNORECASE)
-        if specgrid_match:
-            self.grid_dimensions = (
-                int(specgrid_match.group(1)),
-                int(specgrid_match.group(2)),
-                int(specgrid_match.group(3))
+        parsed = {}
+        
+        # Extract grid dimensions
+        dim_match = re.search(r'DIMENS\s+(\d+)\s+(\d+)\s+(\d+)', content)
+        if dim_match:
+            parsed['grid_dimensions'] = (
+                int(dim_match.group(1)),
+                int(dim_match.group(2)),
+                int(dim_match.group(3))
             )
+        
+        # Extract wells
+        wells = []
+        well_pattern = r"'(\w+)'\s+['\"]?(\w+)['\"]?\s+(\d+)\s+(\d+)\s+([\d\.]+)\s+['\"]?(\w+)['\"]?"
+        for match in re.finditer(well_pattern, content):
+            wells.append({
+                'name': match.group(1),
+                'type': 'INJECTOR' if 'INJ' in match.group(1).upper() else 'PRODUCER',
+                'i': int(match.group(3)),
+                'j': int(match.group(4)),
+                'k': float(match.group(5)),
+                'fluid': match.group(6)
+            })
+        
+        parsed['wells'] = wells
+        
+        return parsed
     
-    def _parse_porosity_inc(self, path: Path):
-        """Parse porosity data."""
-        logger.info(f"Parsing porosity from {path}")
+    def _parse_grid_files(self):
+        """Parse grid geometry files."""
+        parsed = {}
         
-        values = self._parse_eclipse_data_file(path)
-        if values:
-            self.porosity = np.array(values)
-            logger.info(f"Loaded porosity: {self.porosity.shape}")
+        # Parse GRID.INC
+        grid_file = self.data_dir / "SPE9_GRID.INC"
+        if grid_file.exists():
+            with open(grid_file, 'r') as f:
+                grid_data = f.read()
+            # Parse DX, DY, DZ arrays
+            parsed['cell_dimensions'] = self._extract_arrays(grid_data)
+        
+        # Parse TOPS
+        tops_file = self.data_dir / "TOPSVALUES.DATA"
+        if tops_file.exists():
+            with open(tops_file, 'r') as f:
+                tops_data = f.read()
+            parsed['tops'] = self._parse_numbers(tops_data)
+        
+        return parsed
     
-    def _parse_pvt_inc(self, path: Path):
-        """Parse PVT tables."""
-        logger.info(f"Parsing PVT from {path}")
+    def _parse_rock_properties(self):
+        """Parse rock properties."""
+        parsed = {}
         
-        with open(path, 'r') as f:
-            content = f.read()
+        # Parse porosity
+        poro_file = self.data_dir / "SPE9_PORO.INC"
+        if poro_file.exists():
+            with open(poro_file, 'r') as f:
+                poro_data = f.read()
+            parsed['porosity'] = self._parse_numbers(poro_data)
         
-        # Simplified parsing - extract all tables
-        tables = ['PVTO', 'PVTG', 'PVTW', 'PVDG']
-        for table in tables:
-            pattern = rf'{table}\s*(.*?)(?=\s*/\s*|\n\s*[A-Z]+\s*$|\Z)'
-            match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
-            if match:
-                self.pvt_tables[table] = self._parse_table_data(match.group(1))
+        # Parse permeability
+        perm_file = self.data_dir / "PERMVALUES.DATA"
+        if perm_file.exists():
+            with open(perm_file, 'r') as f:
+                perm_data = f.read()
+            parsed['permeability'] = self._parse_numbers(perm_data)
+        
+        return parsed
     
-    def _parse_saturation_tables_inc(self, path: Path):
-        """Parse saturation tables."""
-        logger.info(f"Parsing saturation tables from {path}")
+    def _parse_fluid_properties(self):
+        """Parse fluid properties."""
+        parsed = {}
         
-        with open(path, 'r') as f:
-            content = f.read()
+        # Parse PVT
+        pvt_file = self.data_dir / "SPE9_PVT.INC"
+        if pvt_file.exists():
+            parsed['pvt_tables'] = self._parse_pvt_tables(pvt_file)
         
-        tables = ['SGOF', 'SWOF', 'SLGOF', 'SOF3']
-        for table in tables:
-            pattern = rf'{table}\s*(.*?)(?=\s*/\s*|\n\s*[A-Z]+\s*$|\Z)'
-            match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
-            if match:
-                data = self._parse_table_data(match.group(1))
-                if len(data) > 0 and all(len(row) >= 4 for row in data):
-                    self.saturation_tables[table] = np.array(data)
+        # Parse saturation tables
+        sat_file = self.data_dir / "SPE9_SATURATION_TABLES.INC"
+        if sat_file.exists():
+            parsed['saturation_tables'] = self._parse_saturation_tables(sat_file)
+        
+        return parsed
     
-    def _parse_permeability_values(self, path: Path):
-        """Parse permeability values."""
-        logger.info(f"Parsing permeability from {path}")
-        
-        values = self._parse_eclipse_data_file(path)
-        if values:
-            self.permeability = np.array(values)
-            logger.info(f"Loaded permeability: {self.permeability.shape}")
-    
-    def _parse_tops_values(self, path: Path):
-        """Parse TOPS values."""
-        logger.info(f"Parsing TOPS from {path}")
-        
-        values = self._parse_eclipse_data_file(path)
-        if values:
-            self.tops = np.array(values)
-            logger.info(f"Loaded TOPS: {self.tops.shape}")
-    
-    def _parse_eclipse_data_file(self, path: Path) -> List[float]:
-        """Generic parser for Eclipse data files."""
-        values = []
-        
-        try:
-            with open(path, 'r') as f:
-                for line in f:
-                    # Remove comments
-                    if '--' in line:
-                        line = line.split('--')[0]
-                    
-                    # Parse numbers, handling Eclipse format (e.g., 4*0.25)
-                    tokens = line.strip().split()
-                    i = 0
-                    while i < len(tokens):
-                        token = tokens[i]
-                        
-                        # Check for multiplier pattern
-                        if '*' in token and not token.startswith('*'):
-                            try:
-                                mult_str, val_str = token.split('*')
-                                multiplier = int(mult_str)
-                                value = float(val_str)
-                                values.extend([value] * multiplier)
-                            except ValueError:
-                                # Try to parse as single number
-                                try:
-                                    values.append(float(token))
-                                except ValueError:
-                                    pass  # Skip non-numeric
-                        else:
-                            try:
-                                values.append(float(token))
-                            except ValueError:
-                                pass
-                        i += 1
-            
-        except Exception as e:
-            logger.error(f"Error parsing {path}: {e}")
-        
-        return values
-    
-    def _parse_table_data(self, content: str) -> List[List[float]]:
-        """Parse table data."""
-        table = []
-        lines = [line.strip() for line in content.split('\n') if line.strip()]
-        
+    def _parse_numbers(self, text):
+        """Extract numbers from text."""
+        # Remove comments
+        lines = text.split('\n')
+        cleaned = []
         for line in lines:
             if '--' in line:
                 line = line.split('--')[0]
-            
-            numbers = []
-            tokens = line.split()
-            for token in tokens:
-                try:
-                    numbers.append(float(token))
-                except ValueError:
-                    # Skip non-numeric
-                    continue
-            
-            if numbers:
-                table.append(numbers)
+            line = line.strip()
+            if line:
+                cleaned.append(line)
         
-        return table
+        text = ' '.join(cleaned)
+        
+        # Extract numbers
+        numbers = []
+        for match in re.finditer(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', text):
+            try:
+                numbers.append(float(match.group()))
+            except:
+                pass
+        
+        return np.array(numbers)
     
-    def _set_defaults_if_needed(self):
-        """Set default values for missing data."""
-        total_cells = self.grid_dimensions[0] * self.grid_dimensions[1] * self.grid_dimensions[2]
+    def _extract_arrays(self, text):
+        """Extract array definitions."""
+        arrays = {}
         
-        # Default permeability if missing
-        if self.permeability is None:
-            logger.warning("No permeability data, using defaults")
-            self.permeability = np.random.lognormal(mean=2.0, sigma=1.0, size=total_cells)
+        # Find array definitions like DX, DY, DZ
+        array_pattern = r'(\w+)\s*\n\s*(\d+\*\s*[\d\.]+(?:\s+\d+\*\s*[\d\.]+)*)'
         
-        # Default porosity if missing
-        if self.porosity is None:
-            logger.warning("No porosity data, using defaults")
-            self.porosity = np.random.uniform(0.1, 0.3, size=total_cells)
+        for match in re.finditer(array_pattern, text, re.IGNORECASE):
+            array_name = match.group(1).strip()
+            array_values = match.group(2)
+            arrays[array_name] = self._parse_numbers(array_values)
         
-        # Default TOPS if missing
-        if self.tops is None:
-            logger.warning("No TOPS data, using defaults")
-            num_tops = self.grid_dimensions[0] * self.grid_dimensions[1]
-            self.tops = np.linspace(8000, 8500, num_tops)
-        
-        # Default wells if none parsed
-        if not self.wells:
-            logger.warning("No wells parsed, adding defaults")
-            self.wells = [
-                WellSpecification(name='INJ1', i_location=5, j_location=5, k_location=1, well_type='INJECTOR'),
-                WellSpecification(name='PROD1', i_location=20, j_location=20, k_location=15, well_type='PRODUCER')
-            ]
+        return arrays
     
-    def _validate_data_consistency(self):
-        """Validate data consistency."""
-        total_cells = self.grid_dimensions[0] * self.grid_dimensions[1] * self.grid_dimensions[2]
+    def _parse_pvt_tables(self, filepath):
+        """Parse PVT tables."""
+        with open(filepath, 'r') as f:
+            content = f.read()
         
-        if self.permeability is not None and len(self.permeability) != total_cells:
-            logger.warning(f"Permeability size mismatch: {len(self.permeability)} != {total_cells}")
+        tables = {}
         
-        if self.porosity is not None and len(self.porosity) != total_cells:
-            logger.warning(f"Porosity size mismatch: {len(self.porosity)} != {total_cells}")
+        # Look for PVTO (Oil PVT) and PVDG (Gas PVT) tables
+        pvto_match = re.search(r'PVTO\s*(.*?)\s*/\s*/\s*', content, re.DOTALL)
+        if pvto_match:
+            tables['oil'] = self._parse_pvto_table(pvto_match.group(1))
         
-        expected_tops = self.grid_dimensions[0] * self.grid_dimensions[1]
-        if self.tops is not None and len(self.tops) != expected_tops:
-            logger.warning(f"TOPS size mismatch: {len(self.tops)} != {expected_tops}")
+        pvdg_match = re.search(r'PVDG\s*(.*?)\s*/\s*', content, re.DOTALL)
+        if pvdg_match:
+            tables['gas'] = self._parse_pvdg_table(pvdg_match.group(1))
+        
+        pvtw_match = re.search(r'PVTW\s*(.*?)\s*/\s*', content, re.DOTALL)
+        if pvtw_match:
+            tables['water'] = self._parse_numbers(pvtw_match.group(1))
+        
+        return tables
     
-    def export_for_simulation(self, output_dir: str = "data/processed") -> Dict[str, Path]:
-        """Export data for simulation."""
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
+    def _parse_saturation_tables(self, filepath):
+        """Parse saturation tables."""
+        with open(filepath, 'r') as f:
+            content = f.read()
         
-        files = {}
+        tables = {}
         
-        # Export wells
-        wells_csv = output_path / "wells.csv"
-        with open(wells_csv, 'w') as f:
-            f.write("name,i,j,k,type,phase,control\n")
-            for well in self.wells:
-                f.write(f"{well.name},{well.i_location},{well.j_location},{well.k_location},"
-                       f"{well.well_type},{well.phase},{well.control_mode}\n")
-        files['wells'] = wells_csv
+        # Look for SWOF and SGOF tables
+        swof_match = re.search(r'SWOF\s*(.*?)\s*/\s*', content, re.DOTALL)
+        if swof_match:
+            tables['swof'] = self._parse_numbers(swof_match.group(1))
         
-        # Export arrays
-        if self.permeability is not None:
-            perm_npy = output_path / "permeability.npy"
-            np.save(perm_npy, self.permeability)
-            files['permeability'] = perm_npy
+        sgof_match = re.search(r'SGOF\s*(.*?)\s*/\s*', content, re.DOTALL)
+        if sgof_match:
+            tables['sgof'] = self._parse_numbers(sgof_match.group(1))
         
-        if self.porosity is not None:
-            poro_npy = output_path / "porosity.npy"
-            np.save(poro_npy, self.porosity)
-            files['porosity'] = poro_npy
-        
-        if self.tops is not None:
-            tops_npy = output_path / "tops.npy"
-            np.save(tops_npy, self.tops)
-            files['tops'] = tops_npy
-        
-        # Export config summary
-        summary = {
-            'grid': self.grid_dimensions,
-            'well_count': len(self.wells),
-            'has_permeability': self.permeability is not None,
-            'has_porosity': self.porosity is not None,
-            'has_tops': self.tops is not None,
-            'pvt_tables': list(self.pvt_tables.keys()),
-            'saturation_tables': list(self.saturation_tables.keys())
-        }
-        
-        summary_json = output_path / "summary.json"
-        with open(summary_json, 'w') as f:
-            json.dump(summary, f, indent=2)
-        files['summary'] = summary_json
-        
-        logger.info(f"Exported {len(files)} files to {output_path}")
-        return files
-    
-    def get_simulation_data(self) -> Dict[str, Any]:
-        """Get all parsed data."""
-        return {
-            'wells': [well.to_dict() for well in self.wells],
-            'grid_dimensions': self.grid_dimensions,
-            'permeability': self.permeability,
-            'porosity': self.porosity,
-            'tops': self.tops,
-            'pvt_tables': self.pvt_tables,
-            'saturation_tables': self.saturation_tables,
-            'configs': self.configs
-        }
+        return tables
