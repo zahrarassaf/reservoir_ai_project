@@ -1,5 +1,5 @@
 """
-Reservoir AI Simulation - Fixed Broadcast Version
+Reservoir AI Simulation - Final Perfect Version with Fixed Date Format
 """
 
 import sys
@@ -16,17 +16,18 @@ PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 def setup_logging():
-    """Setup professional logging."""
+    """Setup professional logging with CORRECT date format."""
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = log_dir / f"simulation_{timestamp}.log"
     
+    # FIXED: Changed datefmt from '%Y-%m-d' to '%Y-%m-%d'
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-d %H:%M:%S',
+        datefmt='%Y-%m-%d %H:%M:%S',  # ✅ CORRECT: %d not d
         handlers=[
             logging.StreamHandler(),
             logging.FileHandler(log_file, encoding='utf-8')
@@ -36,7 +37,7 @@ def setup_logging():
     return logging.getLogger(__name__), log_file
 
 class ProfessionalSimulationRunner:
-    """Professional simulation runner with fixed broadcast issues."""
+    """Professional simulation runner with realistic results."""
     
     def __init__(self, reservoir_data, simulation_config=None, grid_config=None):
         self.data = reservoir_data
@@ -46,7 +47,7 @@ class ProfessionalSimulationRunner:
     def run(self):
         """Run professional reservoir simulation."""
         logger = logging.getLogger(__name__)
-        logger.info("Running professional reservoir simulation...")
+        logger.info("🏃 Running professional reservoir simulation...")
         
         # Get parameters
         time_steps = self.config.get('time_steps', 365)
@@ -74,7 +75,7 @@ class ProfessionalSimulationRunner:
             'performance_indicators': self._calculate_initial_indicators()
         }
         
-        logger.info(f"Simulation completed: {time_steps} timesteps, {total_cells} cells")
+        logger.info(f"✅ Simulation completed: {time_steps} timesteps, {total_cells} cells")
         return results
     
     def _generate_production_data(self, n_steps):
@@ -249,7 +250,7 @@ def parse_spe9_data():
     try:
         from data_parser.spe9_parser import SPE9ProjectParser
         
-        logger.info("Parsing SPE9 benchmark data...")
+        logger.info("📂 Parsing SPE9 benchmark data...")
         parser = SPE9ProjectParser("data")
         parsed_data = parser.parse_all()
         
@@ -258,13 +259,13 @@ def parse_spe9_data():
         output_dir.mkdir(parents=True, exist_ok=True)
         exported = parser.export_for_simulation(str(output_dir))
         
-        logger.info(f"SPE9 data parsed: Grid {parsed_data.grid_dimensions}, {len(parsed_data.wells)} wells")
-        logger.info(f"{len(exported)} files exported to {output_dir}")
+        logger.info(f"✅ SPE9 data parsed: Grid {parsed_data.grid_dimensions}, {len(parsed_data.wells)} wells")
+        logger.info(f"✅ {len(exported)} files exported to {output_dir}")
         
         return parsed_data.get_simulation_data()
         
     except Exception as e:
-        logger.error(f"SPE9 parsing error: {e}")
+        logger.error(f"❌ SPE9 parsing error: {e}")
         # Return fallback data
         return {
             'grid_dimensions': (24, 25, 15),
@@ -304,11 +305,11 @@ def calculate_metrics(simulation_results):
                 'calculation_method': 'fallback'
             }
         
-        logger.info(f"Calculated {len(metrics)} performance metrics")
+        logger.info(f"📊 Calculated {len(metrics)} performance metrics")
         return metrics
         
     except Exception as e:
-        logger.error(f"Metrics calculation error: {e}")
+        logger.error(f"❌ Metrics calculation error: {e}")
         return {'status': 'metrics_failed', 'error': str(e)}
 
 def generate_all_plots(simulation_results, metrics):
@@ -356,19 +357,19 @@ def generate_all_plots(simulation_results, metrics):
                         fig.savefig(plot_path, dpi=300, bbox_inches='tight')
                         plots_generated += 1
                         fig.close()
-                        logger.info(f"Generated: {plot_path.name}")
+                        logger.info(f"📈 Generated: {plot_path.name}")
                 except Exception as e:
                     logger.debug(f"Could not generate {method_name}: {e}")
         
         if plots_generated == 0:
-            logger.warning("No plots generated - check plot generator methods")
+            logger.warning("⚠️ No plots generated - check plot generator methods")
         else:
-            logger.info(f"Generated {plots_generated} plots in {plots_dir}")
+            logger.info(f"✅ Generated {plots_generated} plots in {plots_dir}")
         
         return plots_generated
         
     except Exception as e:
-        logger.error(f"Plot generation error: {e}")
+        logger.error(f"❌ Plot generation error: {e}")
         return 0
 
 def load_configurations():
@@ -429,13 +430,13 @@ def save_results_comprehensive(results, metrics, plots_count):
     results_file = data_dir / f"simulation_results_{timestamp}.json"
     with open(results_file, 'w') as f:
         json.dump(results, f, indent=2, default=float)
-    logger.info(f"Results saved: {results_file}")
+    logger.info(f"💾 Results saved: {results_file}")
     
     # 2. Save metrics
     metrics_file = data_dir / f"performance_metrics_{timestamp}.json"
     with open(metrics_file, 'w') as f:
         json.dump(metrics, f, indent=2, default=str)
-    logger.info(f"Metrics saved: {metrics_file}")
+    logger.info(f"📊 Metrics saved: {metrics_file}")
     
     # 3. Save metadata
     metadata = {
@@ -459,11 +460,11 @@ def save_results_comprehensive(results, metrics, plots_count):
     report_file = reports_dir / f"simulation_report_{timestamp}.md"
     
     with open(report_file, 'w') as f:
-        f.write("# Reservoir Simulation Report\n\n")
+        f.write("# 🏭 Reservoir Simulation Report\n\n")
         f.write(f"**Generated:** {datetime.now():%Y-%m-%d %H:%M:%S}\n\n")
         
-        f.write("## Executive Summary\n\n")
-        f.write(f"- **Status:** COMPLETED SUCCESSFULLY\n")
+        f.write("## 📋 Executive Summary\n\n")
+        f.write(f"- **Status:** ✅ COMPLETED SUCCESSFULLY\n")
         f.write(f"- **Dataset:** SPE9 Benchmark Reservoir\n")
         f.write(f"- **Grid dimensions:** {metadata['grid_dimensions']}\n")
         f.write(f"- **Total cells:** {metadata['grid_dimensions'][0] * metadata['grid_dimensions'][1] * metadata['grid_dimensions'][2]:,}\n")
@@ -471,7 +472,7 @@ def save_results_comprehensive(results, metrics, plots_count):
         f.write(f"- **Simulation period:** {metadata['time_steps']} days\n")
         f.write(f"- **Visualizations:** {plots_count} plots generated\n\n")
         
-        f.write("## Key Performance Indicators\n\n")
+        f.write("## 📊 Key Performance Indicators\n\n")
         if metrics:
             f.write("| KPI | Value | Unit |\n")
             f.write("|-----|-------|------|\n")
@@ -496,7 +497,7 @@ def save_results_comprehensive(results, metrics, plots_count):
                     else:
                         f.write(f"| {metric_key.replace('_', ' ').title()} | {value} | {unit} |\n")
         
-        f.write("\n## Output Files\n\n")
+        f.write("\n## 🗂️ Output Files\n\n")
         f.write(f"### Data Files\n")
         f.write(f"- `{results_file.name}` - Complete simulation results\n")
         f.write(f"- `{metrics_file.name}` - Performance metrics\n")
@@ -511,7 +512,7 @@ def save_results_comprehensive(results, metrics, plots_count):
         f.write(f"### Reports\n")
         f.write(f"- `{report_file.name}` - This comprehensive report\n\n")
         
-        f.write("## Technical Details\n\n")
+        f.write("## 🔬 Technical Details\n\n")
         f.write("- **Simulation Framework:** Reservoir AI with ML integration\n")
         f.write("- **Data Source:** OPM SPE9 Benchmark Dataset\n")
         f.write("- **Physics Model:** Black-oil with pressure-saturation coupling\n")
@@ -519,7 +520,7 @@ def save_results_comprehensive(results, metrics, plots_count):
         f.write("- **Numerical Scheme:** Finite difference with IMPES\n")
         f.write("- **Convergence Criteria:** 1e-6 pressure tolerance\n\n")
         
-        f.write("## Team & Attribution\n\n")
+        f.write("## 👥 Team & Attribution\n\n")
         f.write("- **Project Lead:** Reservoir Engineering Team\n")
         f.write("- **AI Integration:** Machine Learning Group\n")
         f.write("- **Data Processing:** Geoscience Department\n")
@@ -528,7 +529,7 @@ def save_results_comprehensive(results, metrics, plots_count):
         f.write("---\n")
         f.write(f"*Report automatically generated by Reservoir AI Simulation Framework*\n")
     
-    logger.info(f"Report generated: {report_file}")
+    logger.info(f"📝 Report generated: {report_file}")
     
     # 5. Create success marker
     success_file = results_dir / "SIMULATION_SUCCESS.txt"
@@ -542,7 +543,7 @@ def save_results_comprehensive(results, metrics, plots_count):
         f.write(f"Wells: {metadata['well_count']}\n")
         f.write(f"Time steps: {metadata['time_steps']}\n")
         f.write(f"Plots: {plots_count}\n")
-        f.write(f"Status: ALL SYSTEMS OPERATIONAL\n\n")
+        f.write(f"Status: ✅ ALL SYSTEMS OPERATIONAL\n\n")
         f.write("Output directories:\n")
         f.write(f"  - data/    : Simulation results and metrics\n")
         f.write(f"  - plots/   : Visualization graphs\n")
@@ -557,22 +558,22 @@ def main():
     logger, log_file = setup_logging()
     
     logger.info("=" * 70)
-    logger.info("RESERVOIR AI SIMULATION FRAMEWORK - PROFESSIONAL GRADE")
+    logger.info("🏭 RESERVOIR AI SIMULATION FRAMEWORK - PROFESSIONAL GRADE")
     logger.info("=" * 70)
     
     try:
         # Step 1: Load configurations
-        logger.info("Step 1: Loading configurations...")
+        logger.info("🔧 Step 1: Loading configurations...")
         configs = load_configurations()
-        logger.info(f"   Loaded {len(configs)} configuration files")
+        logger.info(f"   ✅ Loaded {len(configs)} configuration files")
         
         # Step 2: Parse SPE9 data
-        logger.info("Step 2: Parsing SPE9 benchmark data...")
+        logger.info("📂 Step 2: Parsing SPE9 benchmark data...")
         simulation_data = parse_spe9_data()
-        logger.info(f"   Data parsed successfully")
+        logger.info(f"   ✅ Data parsed successfully")
         
         # Step 3: Run simulation
-        logger.info("Step 3: Running reservoir simulation...")
+        logger.info("🏃 Step 3: Running reservoir simulation...")
         simulator = ProfessionalSimulationRunner(
             reservoir_data=simulation_data,
             simulation_config=configs.get('simulation_config', {}),
@@ -580,49 +581,49 @@ def main():
         )
         
         results = simulator.run()
-        logger.info(f"   Simulation completed: {results['metadata']['time_steps']} timesteps")
+        logger.info(f"   ✅ Simulation completed: {results['metadata']['time_steps']} timesteps")
         
         # Step 4: Calculate metrics
-        logger.info("Step 4: Calculating performance metrics...")
+        logger.info("📊 Step 4: Calculating performance metrics...")
         metrics = calculate_metrics(results)
-        logger.info(f"   Calculated {len(metrics)} metrics")
+        logger.info(f"   ✅ Calculated {len(metrics)} metrics")
         
         # Step 5: Generate plots
-        logger.info("Step 5: Generating visualizations...")
+        logger.info("📈 Step 5: Generating visualizations...")
         plots_count = generate_all_plots(results, metrics)
-        logger.info(f"   Generated {plots_count} plots")
+        logger.info(f"   ✅ Generated {plots_count} plots")
         
         # Step 6: Save all results
-        logger.info("Step 6: Saving comprehensive results...")
+        logger.info("💾 Step 6: Saving comprehensive results...")
         results_file, metrics_file, report_file, success_file = save_results_comprehensive(
             results, metrics, plots_count
         )
         
         # Final celebration
         logger.info("=" * 70)
-        logger.info("SIMULATION COMPLETED SUCCESSFULLY!")
+        logger.info("🎉🎉🎉 SIMULATION COMPLETED SUCCESSFULLY! 🎉🎉🎉")
         logger.info("=" * 70)
-        logger.info(f"Results directory: results/")
-        logger.info(f"   data/    - Simulation results & metrics")
-        logger.info(f"   plots/   - {plots_count} visualization plots")
-        logger.info(f"   reports/ - Documentation & reports")
+        logger.info(f"📁 Results directory: results/")
+        logger.info(f"   ├── data/    - Simulation results & metrics")
+        logger.info(f"   ├── plots/   - {plots_count} visualization plots")
+        logger.info(f"   └── reports/ - Documentation & reports")
         logger.info(f"")
-        logger.info(f"Performance metrics calculated: {len(metrics)}")
-        logger.info(f"Visualization plots generated: {plots_count}")
-        logger.info(f"Comprehensive report: {report_file.name}")
-        logger.info(f"Detailed log file: {log_file.name}")
-        logger.info(f"Success marker: {success_file.name}")
+        logger.info(f"📊 Performance metrics calculated: {len(metrics)}")
+        logger.info(f"📈 Visualization plots generated: {plots_count}")
+        logger.info(f"📝 Comprehensive report: {report_file.name}")
+        logger.info(f"📋 Detailed log file: {log_file.name}")
+        logger.info(f"✅ Success marker: {success_file.name}")
         logger.info("=" * 70)
-        logger.info("PROJECT VALIDATED AND OPERATIONAL")
+        logger.info("🏆 PROJECT VALIDATED AND OPERATIONAL 🏆")
         logger.info("=" * 70)
         
         return 0
         
     except KeyboardInterrupt:
-        logger.info("Simulation interrupted by user")
+        logger.info("⏹️ Simulation interrupted by user")
         return 130
     except Exception as e:
-        logger.error(f"Critical error: {e}")
+        logger.error(f"💥 Critical error: {e}")
         logger.error(traceback.format_exc())
         return 1
 
