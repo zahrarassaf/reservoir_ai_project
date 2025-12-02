@@ -8,6 +8,7 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, Optional
 import yaml
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ class SimulationRunner:
         """Initialize simulation runner with configuration"""
         self.config = self.load_config(config_path)
         self.simulator = self.detect_simulator()
-        self.results_dir = "results/simulation_output"
+        self.results_dir = Path("results/simulation_output")
         
     def load_config(self, config_path: str) -> Dict[str, Any]:
         """Load simulation configuration from YAML file"""
@@ -38,14 +39,15 @@ class SimulationRunner:
         
         for simulator in simulators:
             try:
-                subprocess.run([simulator, '--version'], 
-                             capture_output=True, check=False)
-                logger.info(f"Detected simulator: {simulator}")
-                return simulator
+                result = subprocess.run([simulator, '--version'], 
+                                      capture_output=True, text=True, check=False)
+                if result.returncode == 0 or 'version' in result.stdout.lower():
+                    logger.info(f"Detected simulator: {simulator}")
+                    return simulator
             except FileNotFoundError:
                 continue
                 
-        logger.warning("No simulator found. Using 'flow' as default")
+        logger.warning("No simulator found in PATH. Using 'flow' as default")
         return 'flow'
         
     def validate_inputs(self) -> bool:
@@ -63,81 +65,143 @@ class SimulationRunner:
                 logger.error(f"Missing required file: {file_path}")
                 return False
                 
-        logger.info("All input files validated successfully")
+        logger.info("✅ All input files validated successfully")
         return True
         
     def prepare_environment(self) -> None:
         """Prepare simulation environment"""
-        os.makedirs(self.results_dir, exist_ok=True)
+        self.results_dir.mkdir(parents=True, exist_ok=True)
         
-        # Create symbolic links to data files if needed
-        if not os.path.exists("SPE9.DATA"):
-            os.symlink("data/SPE9.DATA", "SPE9.DATA")
-            
+        # Create logs directory
+        logs_dir = Path("logs")
+        logs_dir.mkdir(exist_ok=True)
+        
+        logger.info(f"Prepared environment: results in {self.results_dir}")
+        
     def run_simulation(self) -> bool:
         """Execute the reservoir simulation"""
         if not self.validate_inputs():
+            logger.error("Input validation failed. Cannot run simulation.")
             return False
             
         self.prepare_environment()
         
-        logger.info(f"Starting SPE9 simulation at {datetime.now()}")
+        logger.info("=" * 60)
+        logger.info("🚀 Starting SPE9 Reservoir Simulation")
+        logger.info("=" * 60)
+        logger.info(f"Start Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"Simulator: {self.simulator}")
         logger.info(f"Grid: {self.config['grid']['dimensions']}")
+        logger.info(f"Total Cells: {self.config['grid']['total_cells']}")
         logger.info(f"Wells: {self.config['wells']['total']}")
+        logger.info(f"Simulation Period: {self.config['simulation_period']['total_days']} days")
+        logger.info("=" * 60)
         
         try:
-            cmd = [self.simulator, "SPE9.DATA"]
+            # Change to data directory for simulation
+            original_dir = os.getcwd()
+            data_dir = Path("data")
             
-            with open(f"{self.results_dir}/simulation.log", "w") as log_file:
+            if not data_dir.exists():
+                logger.error(f"Data directory not found: {data_dir}")
+                return False
+                
+            os.chdir(data_dir)
+            
+            # Prepare command
+            cmd = [self.simulator, "SPE9.DATA"]
+            logger.info(f"Command: {' '.join(cmd)}")
+            
+            # Run simulation
+            log_file_path = self.results_dir.parent / "simulation.log"
+            with open(log_file_path, 'w') as log_file:
+                log_file.write(f"SPE9 Simulation Log - {datetime.now()}\n")
+                log_file.write("=" * 60 + "\n")
+                log_file.write(f"Command: {' '.join(cmd)}\n")
+                log_file.write("=" * 60 + "\n\n")
+                
                 process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    text=True
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True
                 )
                 
                 # Stream output to log file and console
+                logger.info("Simulation running...")
                 for line in process.stdout:
                     log_file.write(line)
-                    if "TIME" in line or "SUMMARY" in line:
-                        logger.info(line.strip())
+                    # Log important events
+                    if "TIME" in line and "REPORT" in line:
+                        logger.info(f"Simulation progress: {line.strip()}")
+                    elif "ERROR" in line or "WARNING" in line:
+                        logger.warning(line.strip())
                         
+                # Wait for process to complete
                 process.wait()
                 
-                if process.returncode == 0:
-                    logger.info("Simulation completed successfully")
-                    self._copy_results()
-                    return True
-                else:
-                    error_output = process.stderr.read()
-                    logger.error(f"Simulation failed: {error_output}")
-                    return False
+                # Capture stderr
+                stderr_output = process.stderr.read()
+                if stderr_output:
+                    log_file.write("\n=== STDERR ===\n")
+                    log_file.write(stderr_output)
+                    logger.warning(f"Simulator stderr: {stderr_output[:200]}...")
                     
+            # Return to original directory
+            os.chdir(original_dir)
+            
+            if process.returncode == 0:
+                logger.info("✅ Simulation completed successfully")
+                self._copy_results()
+                return True
+            else:
+                logger.error(f"❌ Simulation failed with return code: {process.returncode}")
+                if stderr_output:
+                    logger.error(f"Error output: {stderr_output[:500]}")
+                return False
+                
+        except FileNotFoundError as e:
+            logger.error(f"❌ Simulator not found: {self.simulator}")
+            logger.error(f"Please install {self.simulator} or add it to PATH")
+            return False
         except Exception as e:
-            logger.error(f"Simulation execution error: {e}")
+            logger.error(f"❌ Simulation execution error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
             
     def _copy_results(self) -> None:
         """Copy simulation results to results directory"""
+        data_dir = Path("data")
         result_files = [
             "SPE9.UNRST",
-            "SPE9.SMSPEC",
+            "SPE9.SMSPEC", 
             "SPE9.INIT",
             "SPE9.EGRID",
-            "SPE9.PRT"
+            "SPE9.PRT",
+            "SPE9.LOG"
         ]
         
-        for file in result_files:
-            if os.path.exists(file):
-                os.rename(file, f"{self.results_dir}/{file}")
-                logger.info(f"Saved: {file}")
+        copied = 0
+        for file_name in result_files:
+            src = data_dir / file_name
+            if src.exists():
+                dst = self.results_dir / file_name
+                import shutil
+                shutil.move(str(src), str(dst))
+                copied += 1
+                logger.info(f"📄 Saved: {file_name}")
                 
+        logger.info(f"📁 Total files saved: {copied}")
+        
     def get_simulation_info(self) -> Dict[str, Any]:
         """Get simulation information and statistics"""
         return {
             "simulator": self.simulator,
             "config": self.config,
-            "results_directory": self.results_dir,
-            "timestamp": datetime.now().isoformat()
+            "results_directory": str(self.results_dir),
+            "timestamp": datetime.now().isoformat(),
+            "author": self.config.get('simulation', {}).get('author', 'Unknown')
         }
