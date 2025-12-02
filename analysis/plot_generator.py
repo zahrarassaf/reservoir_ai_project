@@ -195,4 +195,11 @@ class PlotGenerator:
             
         logger.info("🖼️ Creating water cut development plot...")
         
-        fig, ax = plt.subplots(figsize=(10
+              # Line 198 should be:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Or for multi-line clarity:
+        fig, ax = plt.subplots(
+            figsize=(10, 6),
+            constrained_layout=True
+        )
