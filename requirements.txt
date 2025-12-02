@@ -1,6 +1,19 @@
+# Reservoir Simulation Framework Requirements
+# Core dependencies
 numpy>=1.21.0
-matplotlib>=3.5.0
-PyYAML>=6.0
-scipy>=1.7.0
 pandas>=1.3.0
-scikit-learn>=1.0.0
+matplotlib>=3.5.0
+scipy>=1.7.0
+
+# Development dependencies
+pytest>=7.0.0
+pytest-cov>=3.0.0
+black>=22.0.0
+flake8>=5.0.0
+mypy>=0.910
+
+# Optional dependencies
+# jupyter>=1.0.0
+# plotly>=5.10.0
+# streamlit>=1.12.0
+# openpyxl>=3.0.0
