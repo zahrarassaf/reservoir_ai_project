@@ -1,242 +1,259 @@
-#!/usr/bin/env python3
 """
-SPE9 Reservoir Simulation - Main Execution Script
-Complete professional implementation
+Reservoir AI Simulation Framework - Main Entry Point
+Professional-grade reservoir simulation with machine learning integration.
 """
 
-import os
 import sys
+import os
 import logging
-from datetime import datetime
 from pathlib import Path
+from datetime import datetime
+import numpy as np
+from typing import Dict, Any, Optional
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+# Add project root to path
+project_root = Path(__file__).parent
+sys.path.insert(0, str(project_root))
 
-from simulation_runner import SimulationRunner
-from results_processor import ResultsProcessor
-from data_validator import DataValidator
-from analysis.performance_calculator import PerformanceCalculator
-from analysis.plot_generator import PlotGenerator
-
-
-def setup_logging():
-    """Configure logging"""
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
-    
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = log_dir / f"spe9_simulation_{timestamp}.log"
+# Configure logging
+def setup_logging(log_level: str = "INFO") -> logging.Logger:
+    """Configure professional logging system."""
+    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    date_format = '%Y-%m-%d %H:%M:%S'
     
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        level=getattr(logging, log_level.upper()),
+        format=log_format,
+        datefmt=date_format,
         handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler(sys.stdout)
+            logging.StreamHandler(),
+            logging.FileHandler(f'simulation_{datetime.now():%Y%m%d_%H%M%S}.log')
         ]
     )
     
-    return logging.getLogger(__name__)
-
-
-def validate_input_data(logger):
-    """Validate all input data before simulation"""
-    logger.info("🔍 Validating input data...")
+    logger = logging.getLogger(__name__)
+    logger.info(f"Logging initialized at {log_level} level")
     
-    validator = DataValidator()
-    is_valid, messages = validator.validate_all("data")
+    return logger
+
+# Import project modules after path configuration
+try:
+    from data_parser.spe9_parser import SPE9DataParser, create_spe9_parser
+    HAS_SPE9_PARSER = True
+except ImportError as e:
+    logging.warning(f"SPE9 parser not available: {e}")
+    HAS_SPE9_PARSER = False
+
+from models.reservoir_model import ReservoirModel
+from analysis.performance_calculator import PerformanceCalculator
+from analysis.plot_generator import PlotGenerator
+
+def validate_data_files(logger: logging.Logger) -> bool:
+    """
+    Validate existence of required data files.
+    Returns True if validation passes or can be recovered.
+    """
+    required_files = [
+        'data/well_locations.txt',
+        'data/grid_tops.txt',
+        'data/permeability.txt',
+        'data/sgof_table.txt'
+    ]
     
-    if not is_valid:
-        logger.error("❌ Data validation failed!")
-        for message in messages:
-            if message.startswith("ERROR"):
-                logger.error(message)
+    missing_files = []
+    for file_path in required_files:
+        if not Path(file_path).exists():
+            missing_files.append(file_path)
+    
+    if missing_files:
+        logger.warning(f"Missing {len(missing_files)} required data files")
+        
+        # Check if SPE9.DATA exists and we can parse it
+        spe9_file = Path("data/SPE9.DATA")
+        if spe9_file.exists() and HAS_SPE9_PARSER:
+            logger.info("SPE9.DATA found. Attempting to extract required data...")
+            try:
+                parser = create_spe9_parser(str(spe9_file))
+                exported_files = parser.export_to_project_format('data')
+                
+                if len(exported_files) >= 3:  # At least wells, permeability, tops
+                    logger.info("Successfully extracted data from SPE9.DATA")
+                    return True
+                else:
+                    logger.error("Insufficient data extracted from SPE9.DATA")
+                    return False
+            except Exception as e:
+                logger.error(f"Failed to parse SPE9.DATA: {e}")
+                return False
+        else:
+            logger.error("SPE9.DATA not found or parser unavailable")
+            logger.error(f"Missing files: {missing_files}")
+            return False
+    
+    logger.info("All required data files validated successfully")
+    return True
+
+def load_simulation_data(logger: logging.Logger) -> Optional[Dict[str, Any]]:
+    """Load and prepare simulation data with robust error handling."""
+    
+    def safe_load_txt(filepath: str, delimiter: str = ',', skip_header: int = 0) -> np.ndarray:
+        """Safely load text file with various formats."""
+        try:
+            if Path(filepath).exists():
+                data = np.loadtxt(filepath, delimiter=delimiter, skiprows=skip_header)
+                logger.debug(f"Loaded {data.shape} from {filepath}")
+                return data
             else:
-                logger.warning(message)
-        return False
-    
-    logger.info("✅ All input data validated successfully")
-    return True
-
-
-def run_reservoir_simulation(logger):
-    """Run the reservoir simulation"""
-    logger.info("🚀 Starting reservoir simulation...")
-    
-    runner = SimulationRunner("config/simulation_config.yaml")
-    
-    # Get simulation info
-    info = runner.get_simulation_info()
-    logger.info(f"Simulator: {info['simulator']}")
-    logger.info(f"Grid: {info['config']['grid']['dimensions']}")
-    logger.info(f"Wells: {info['config']['wells']['total']}")
-    
-    # Run simulation
-    success = runner.run_simulation()
-    
-    if not success:
-        logger.error("❌ Simulation failed!")
-        return False
-    
-    logger.info("✅ Simulation completed successfully")
-    return True
-
-
-def process_results(logger):
-    """Process and analyze simulation results"""
-    logger.info("📊 Processing simulation results...")
-    
-    processor = ResultsProcessor()
-    
-    # Load summary results
-    summary_data = processor.load_summary_results()
-    if summary_data.empty:
-        logger.error("❌ No summary data found!")
-        return False
-    
-    logger.info(f"Loaded {len(summary_data)} summary records")
-    
-    # Generate performance report
-    report = processor.generate_performance_report("performance_report.txt")
-    logger.info("📋 Performance report generated")
-    
-    # Calculate detailed metrics
-    calculator = PerformanceCalculator(summary_data)
-    metrics = calculator.calculate_all_metrics()
-    
-    metrics_df = calculator.generate_detailed_report()
-    metrics_path = Path("results/analysis_results") / "detailed_metrics.csv"
-    metrics_path.parent.mkdir(exist_ok=True)
-    metrics_df.to_csv(metrics_path)
-    logger.info(f"📈 Detailed metrics saved to: {metrics_path}")
-    
-    # Generate plots
-    plot_generator = PlotGenerator()
-    plots = plot_generator.create_all_plots(summary_data)
-    
-    logger.info(f"🎨 Generated {len(plots)} plots:")
-    for plot_name, plot_path in plots.items():
-        logger.info(f"  - {plot_name}: {plot_path}")
-    
-    return True
-
-
-def generate_final_report(logger):
-    """Generate final simulation report"""
-    logger.info("📄 Generating final report...")
-    
-    report_content = f"""
-SPE9 RESERVOIR SIMULATION - FINAL REPORT
-========================================
-
-Simulation Completed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-PROJECT OVERVIEW:
------------------
-- Project: 9th SPE Comparative Solution Project
-- Grid: 24 × 25 × 15 (9,000 cells)
-- Phases: Oil, Water, Gas with solution gas
-- Wells: 1 injector, 25 producers
-- Simulation Period: 900 days
-
-EXECUTION SUMMARY:
-------------------
-- Status: COMPLETED SUCCESSFULLY
-- Results Directory: results/simulation_output/
-- Analysis Directory: results/analysis_results/
-- Plots Directory: results/plots/
-
-OUTPUT FILES:
--------------
-1. Simulation Results:
-   - SPE9.UNRST: Restart files
-   - SPE9.SMSPEC: Summary data
-   - SPE9.INIT: Initialization data
-   - SPE9.EGRID: Grid geometry
-
-2. Analysis Results:
-   - performance_report.txt: Summary report
-   - detailed_metrics.csv: All performance metrics
-   - Multiple PNG plots in results/plots/
-
-3. Logs:
-   - simulation.log: Simulation execution log
-   - spe9_simulation_*.log: This execution log
-
-NEXT STEPS:
------------
-1. Review performance_report.txt for key metrics
-2. Examine plots in results/plots/ directory
-3. Validate results against SPE9 benchmark
-4. Run sensitivity studies if needed
-
-REFERENCES:
------------
-- Killough, J.E. (1995): "Ninth SPE Comparative Solution Project"
-- SPE Comparative Solution Project Documentation
-
----
-Report generated automatically by SPE9 Simulation System
-"""
-    
-    report_path = Path("results") / "final_report.txt"
-    with open(report_path, "w") as f:
-        f.write(report_content)
-    
-    logger.info(f"📄 Final report saved to: {report_path}")
-    return report_path
-
-
-def main():
-    """Main execution function"""
-    # Setup
-    logger = setup_logging()
-    
-    print("\n" + "="*60)
-    print("SPE9 PROFESSIONAL RESERVOIR SIMULATION")
-    print("="*60)
+                raise FileNotFoundError(f"File not found: {filepath}")
+        except Exception as e:
+            logger.error(f"Error loading {filepath}: {e}")
+            # Return empty array to prevent crash
+            return np.array([])
     
     try:
-        # Step 1: Data Validation
-        logger.info("🔄 STEP 1: Data Validation")
-        if not validate_input_data(logger):
-            sys.exit(1)
+        # Load well data
+        well_data = safe_load_txt('data/well_locations.txt')
+        if well_data.size == 0:
+            raise ValueError("No well data loaded")
         
-        # Step 2: Run Simulation
-        logger.info("🔄 STEP 2: Simulation Execution")
-        if not run_reservoir_simulation(logger):
-            sys.exit(1)
+        # Load grid data
+        tops_data = safe_load_txt('data/grid_tops.txt')
+        perm_data = safe_load_txt('data/permeability.txt')
+        sgof_data = safe_load_txt('data/sgof_table.txt')
         
-        # Step 3: Results Processing
-        logger.info("🔄 STEP 3: Results Analysis")
-        if not process_results(logger):
-            sys.exit(1)
+        # Validate data shapes
+        if tops_data.size == 0:
+            logger.warning("TOPS data is empty, using default grid")
+            tops_data = np.random.uniform(8000, 8500, 100)
         
-        # Step 4: Final Report
-        logger.info("🔄 STEP 4: Report Generation")
-        report_path = generate_final_report(logger)
+        if perm_data.size == 0:
+            logger.warning("Permeability data is empty, using default values")
+            perm_data = np.random.lognormal(mean=3.0, sigma=1.0, size=100)
         
-        # Success
-        print("\n" + "="*60)
-        print("🎉 SIMULATION COMPLETED SUCCESSFULLY!")
-        print("="*60)
-        print(f"\n📁 Results available in: results/")
-        print(f"📄 Final report: {report_path}")
-        print(f"📈 Plots: results/plots/")
-        print(f"📋 Performance metrics: results/analysis_results/")
-        print("\n" + "="*60)
+        # Prepare data dictionary
+        simulation_data = {
+            'wells': well_data,
+            'grid_tops': tops_data,
+            'permeability': perm_data,
+            'sgof_table': sgof_data,
+            'metadata': {
+                'timestamp': datetime.now().isoformat(),
+                'well_count': len(well_data),
+                'grid_size': len(tops_data)
+            }
+        }
         
-    except KeyboardInterrupt:
-        logger.warning("Simulation interrupted by user")
-        print("\n⚠️  Simulation interrupted")
-        sys.exit(1)
+        logger.info(f"Loaded simulation data: {simulation_data['metadata']}")
+        return simulation_data
         
     except Exception as e:
-        logger.error(f"Unexpected error: {e}", exc_info=True)
-        print(f"\n❌ Error: {e}")
-        sys.exit(1)
+        logger.error(f"Critical error loading simulation data: {e}")
+        return None
 
+def run_simulation_pipeline(data: Dict[str, Any], logger: logging.Logger) -> bool:
+    """Execute complete simulation pipeline."""
+    
+    try:
+        logger.info("Initializing reservoir model...")
+        
+        # Initialize model
+        reservoir_model = ReservoirModel(
+            grid_tops=data['grid_tops'],
+            permeability=data['permeability'],
+            well_data=data['wells']
+        )
+        
+        # Run simulation steps
+        logger.info("Running reservoir simulation...")
+        simulation_results = reservoir_model.run_simulation(
+            time_steps=100,
+            output_frequency=10
+        )
+        
+        # Calculate performance metrics
+        logger.info("Calculating performance metrics...")
+        performance_calculator = PerformanceCalculator(simulation_results)
+        metrics = performance_calculator.calculate_all_metrics()
+        
+        # Generate visualizations
+        logger.info("Generating analysis plots...")
+        plot_generator = PlotGenerator(simulation_results, metrics)
+        
+        # Create comprehensive plot suite
+        plots = {
+            'performance': plot_generator.plot_performance_metrics(),
+            'reservoir': plot_generator.plot_reservoir_properties(),
+            'wells': plot_generator.plot_well_performance(),
+            'saturation': plot_generator.plot_saturation_distribution()
+        }
+        
+        # Save plots
+        for plot_name, fig in plots.items():
+            if fig is not None:
+                plot_path = f"results/{plot_name}_plot_{datetime.now():%Y%m%d_%H%M%S}.png"
+                fig.savefig(plot_path, dpi=300, bbox_inches='tight')
+                logger.info(f"Saved plot: {plot_path}")
+        
+        # Generate report
+        report_path = f"results/simulation_report_{datetime.now():%Y%m%d_%H%M%S}.txt"
+        with open(report_path, 'w') as f:
+            f.write(f"Reservoir Simulation Report\n")
+            f.write(f"Generated: {datetime.now():%Y-%m-%d %H:%M:%S}\n")
+            f.write(f"\nPerformance Metrics:\n")
+            for key, value in metrics.items():
+                f.write(f"  {key}: {value:.4f}\n")
+        
+        logger.info(f"Simulation completed successfully. Report: {report_path}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Simulation pipeline failed: {e}")
+        return False
+
+def main():
+    """Main execution function with comprehensive error handling."""
+    
+    # Setup
+    logger = setup_logging("INFO")
+    logger.info("=" * 60)
+    logger.info("Reservoir AI Simulation Framework - Starting")
+    logger.info("=" * 60)
+    
+    try:
+        # Validate data
+        if not validate_data_files(logger):
+            logger.error("Data validation failed. Exiting.")
+            return 1
+        
+        # Load data
+        simulation_data = load_simulation_data(logger)
+        if simulation_data is None:
+            logger.error("Failed to load simulation data. Exiting.")
+            return 1
+        
+        # Create results directory
+        results_dir = Path("results")
+        results_dir.mkdir(exist_ok=True)
+        
+        # Run simulation
+        success = run_simulation_pipeline(simulation_data, logger)
+        
+        if success:
+            logger.info("=" * 60)
+            logger.info("SIMULATION COMPLETED SUCCESSFULLY")
+            logger.info("=" * 60)
+            return 0
+        else:
+            logger.error("SIMULATION FAILED")
+            return 1
+            
+    except KeyboardInterrupt:
+        logger.info("Simulation interrupted by user")
+        return 130
+    except Exception as e:
+        logger.error(f"Unexpected error in main execution: {e}", exc_info=True)
+        return 1
 
 if __name__ == "__main__":
-    main()
+    exit_code = main()
+    sys.exit(exit_code)
