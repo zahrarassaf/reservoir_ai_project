@@ -1,3 +1,7 @@
+"""
+Setup script for Reservoir Simulation Framework
+"""
+
 from setuptools import setup, find_packages
 
 with open("README.md", "r", encoding="utf-8") as fh:
@@ -7,37 +11,47 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
     requirements = [line.strip() for line in fh if line.strip() and not line.startswith("#")]
 
 setup(
-    name="spe9-simulation",
-    version="1.0.0",
-    author="Zahra Rasaf",
-    author_email="zahra.rasaf@example.com",
-    description="Professional implementation of SPE9 reservoir simulation benchmark",
+    name="reservoir-simulator",
+    version="2.0.0",
+    author="Reservoir Engineering Team",
+    author_email="contact@example.com",
+    description="Professional Reservoir Simulation Framework",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/Zahrarasaf/spe9-simulation",
-    packages=find_packages(include=["src", "src.*", "analysis", "analysis.*"]),
+    url="https://github.com/yourusername/reservoir-simulator",
+    packages=find_packages(),
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering",
         "License :: OSI Approved :: MIT License",
-        "Operating System :: OS Independent",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Operating System :: OS Independent",
     ],
     python_requires=">=3.8",
     install_requires=requirements,
-    entry_points={
-        "console_scripts": [
-            "spe9-run=run_simulation:main",
+    extras_require={
+        "dev": [
+            "pytest>=7.0.0",
+            "black>=22.0.0",
+            "flake8>=5.0.0",
+        ],
+        "plot": [
+            "plotly>=5.10.0",
+            "seaborn>=0.11.0",
+        ],
+        "web": [
+            "streamlit>=1.12.0",
+            "flask>=2.0.0",
         ],
     },
-    package_dir={"": "."},
-    include_package_data=True,
-    project_urls={
-        "Bug Reports": "https://github.com/Zahrarasaf/spe9-simulation/issues",
-        "Source": "https://github.com/Zahrarasaf/spe9-simulation",
+    entry_points={
+        "console_scripts": [
+            "reservoir-sim=run_simulation:main",
+        ],
     },
 )
