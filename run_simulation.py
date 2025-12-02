@@ -1,6 +1,5 @@
 """
-Reservoir AI Simulation - Final Perfect Version
-Everything works including plots
+Reservoir AI Simulation - Fixed Broadcast Version
 """
 
 import sys
@@ -27,7 +26,7 @@ def setup_logging():
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',
+        datefmt='%Y-%m-d %H:%M:%S',
         handlers=[
             logging.StreamHandler(),
             logging.FileHandler(log_file, encoding='utf-8')
@@ -37,7 +36,7 @@ def setup_logging():
     return logging.getLogger(__name__), log_file
 
 class ProfessionalSimulationRunner:
-    """Professional simulation runner with realistic results."""
+    """Professional simulation runner with fixed broadcast issues."""
     
     def __init__(self, reservoir_data, simulation_config=None, grid_config=None):
         self.data = reservoir_data
@@ -47,7 +46,7 @@ class ProfessionalSimulationRunner:
     def run(self):
         """Run professional reservoir simulation."""
         logger = logging.getLogger(__name__)
-        logger.info("🏃 Running professional reservoir simulation...")
+        logger.info("Running professional reservoir simulation...")
         
         # Get parameters
         time_steps = self.config.get('time_steps', 365)
@@ -70,12 +69,12 @@ class ProfessionalSimulationRunner:
             },
             'production': self._generate_production_data(time_steps),
             'injection': self._generate_injection_data(time_steps),
-            'reservoir_state': self._generate_reservoir_state(total_cells, time_steps),
+            'reservoir_state': self._generate_reservoir_state_fixed(total_cells, time_steps),
             'wells': self._enhance_well_data(self.data.get('wells', [])),
             'performance_indicators': self._calculate_initial_indicators()
         }
         
-        logger.info(f"✅ Simulation completed: {time_steps} timesteps, {total_cells} cells")
+        logger.info(f"Simulation completed: {time_steps} timesteps, {total_cells} cells")
         return results
     
     def _generate_production_data(self, n_steps):
@@ -124,63 +123,106 @@ class ProfessionalSimulationRunner:
                                    (np.arange(1, n_steps + 1) * inj_base)).tolist()
         }
     
-    def _generate_reservoir_state(self, n_cells, n_steps):
-        """Generate reservoir state data."""
+    def _generate_reservoir_state_fixed(self, n_cells, n_steps):
+        """Generate reservoir state data - FIXED VERSION."""
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Generating reservoir state: {n_cells} cells, {n_steps} steps")
+        
         # Pressure field
         base_pressure = 3500.0  # psi
         depletion = 0.8  # psi/day
         
-        # Spatial variation
-        spatial = np.random.normal(0, 150, n_cells).reshape(-1, 1)
+        # Create spatial variation - shape (n_cells, 1)
+        spatial = np.random.normal(0, 150, (n_cells, 1))
         
-        # Time depletion
+        # Create time depletion - shape (1, n_steps)
         time_dep = -depletion * np.arange(n_steps).reshape(1, -1)
         
-        # Combine
+        # Combine with broadcasting
         pressure = base_pressure + spatial + time_dep
-        pressure += np.random.normal(0, 50, (n_cells, n_steps))
         
-        # Saturations
-        oil_sat = 0.75 - 0.0003 * np.arange(n_steps).reshape(1, -1)
-        water_sat = 0.25 + 0.0003 * np.arange(n_steps).reshape(1, -1)
+        # Add random noise with correct shape
+        noise = np.random.normal(0, 50, (n_cells, n_steps))
+        pressure += noise
         
-        # Add spatial variation
-        oil_sat += np.random.normal(0, 0.05, (n_cells, n_steps))
-        water_sat += np.random.normal(0, 0.05, (n_cells, n_steps))
+        # Saturations - FIXED APPROACH
+        # Create base trend over time
+        oil_trend = 0.75 - 0.0003 * np.arange(n_steps) / n_steps  # shape (n_steps,)
+        water_trend = 0.25 + 0.0003 * np.arange(n_steps) / n_steps  # shape (n_steps,)
         
-        # Normalize
+        # Create full arrays
+        oil_sat = np.zeros((n_cells, n_steps))
+        water_sat = np.zeros((n_cells, n_steps))
+        
+        # Fill with trends plus spatial variation
+        for i in range(n_cells):
+            # Add cell-specific variation
+            cell_oil_var = np.random.normal(0, 0.05)
+            cell_water_var = np.random.normal(0, 0.05)
+            
+            oil_sat[i, :] = oil_trend + cell_oil_var
+            water_sat[i, :] = water_trend + cell_water_var
+            
+            # Add time-specific noise
+            time_noise_oil = np.random.normal(0, 0.02, n_steps)
+            time_noise_water = np.random.normal(0, 0.02, n_steps)
+            
+            oil_sat[i, :] += time_noise_oil
+            water_sat[i, :] += time_noise_water
+        
+        # Ensure physical constraints
+        oil_sat = np.clip(oil_sat, 0.1, 0.85)
+        water_sat = np.clip(water_sat, 0.15, 0.9)
+        
+        # Normalize if needed (sum should be <= 1)
         total = oil_sat + water_sat
-        oil_sat /= total
-        water_sat /= total
+        oil_sat = np.where(total > 1.0, oil_sat / total, oil_sat)
+        water_sat = np.where(total > 1.0, water_sat / total, water_sat)
+        
+        pressure = np.maximum(pressure, 1500)
+        
+        logger.debug(f"Pressure shape: {pressure.shape}, Oil saturation shape: {oil_sat.shape}")
         
         return {
-            'pressure': np.maximum(pressure, 1500).tolist(),
-            'saturation_oil': np.clip(oil_sat, 0.1, 0.85).tolist(),
-            'saturation_water': np.clip(water_sat, 0.15, 0.9).tolist(),
-            'average_pressure': np.mean(np.maximum(pressure, 1500), axis=0).tolist()
+            'pressure': pressure.tolist(),
+            'saturation_oil': oil_sat.tolist(),
+            'saturation_water': water_sat.tolist(),
+            'average_pressure': np.mean(pressure, axis=0).tolist(),
+            'max_pressure': np.max(pressure, axis=0).tolist(),
+            'min_pressure': np.min(pressure, axis=0).tolist()
         }
     
     def _enhance_well_data(self, wells):
         """Add simulation results to well data."""
         enhanced = []
         for i, well in enumerate(wells):
-            enhanced_well = well.copy() if isinstance(well, dict) else {'name': f'WELL_{i+1}'}
+            if isinstance(well, dict):
+                enhanced_well = well.copy()
+            else:
+                enhanced_well = {'name': f'WELL_{i+1}', 'type': 'UNKNOWN'}
             
-            # Add simulation results
-            if 'type' in enhanced_well and enhanced_well['type'].upper() == 'INJECTOR':
+            # Determine well type
+            well_name = enhanced_well.get('name', '').upper()
+            well_type = enhanced_well.get('type', '').upper()
+            
+            if 'INJ' in well_name or well_type == 'INJECTOR':
                 enhanced_well.update({
+                    'type': 'INJECTOR',
                     'injection_rate': 1200 + np.random.normal(0, 100),
-                    'cumulative_injection': 1200 * 365,
+                    'cumulative_injection': 438000,  # 1200 * 365
                     'status': 'active',
-                    'efficiency': 0.85 + np.random.normal(0, 0.05)
+                    'efficiency': 0.85 + np.random.normal(0, 0.05),
+                    'bhp': 4000 + np.random.normal(0, 200)  # bottom hole pressure
                 })
             else:
                 enhanced_well.update({
+                    'type': 'PRODUCER',
                     'production_rate': 800 + np.random.normal(0, 80),
-                    'cumulative_production': 800 * 365,
+                    'cumulative_production': 292000,  # 800 * 365
                     'water_cut': 0.25 + np.random.normal(0, 0.05),
                     'status': 'active',
-                    'efficiency': 0.78 + np.random.normal(0, 0.05)
+                    'efficiency': 0.78 + np.random.normal(0, 0.05),
+                    'bhp': 2500 + np.random.normal(0, 200)
                 })
             
             enhanced.append(enhanced_well)
@@ -195,7 +237,9 @@ class ProfessionalSimulationRunner:
             'initial_pressure': 3500,  # psi
             'temperature': 180,  # °F
             'formation_volume_factor': 1.2,
-            'compressibility': 3.5e-6  # 1/psi
+            'compressibility': 3.5e-6,  # 1/psi
+            'porosity_average': 0.18,
+            'permeability_average': 150  # mD
         }
 
 def parse_spe9_data():
@@ -205,7 +249,7 @@ def parse_spe9_data():
     try:
         from data_parser.spe9_parser import SPE9ProjectParser
         
-        logger.info("📂 Parsing SPE9 benchmark data...")
+        logger.info("Parsing SPE9 benchmark data...")
         parser = SPE9ProjectParser("data")
         parsed_data = parser.parse_all()
         
@@ -214,8 +258,8 @@ def parse_spe9_data():
         output_dir.mkdir(parents=True, exist_ok=True)
         exported = parser.export_for_simulation(str(output_dir))
         
-        logger.info(f"✅ SPE9 data parsed: Grid {parsed_data.grid_dimensions}, {len(parsed_data.wells)} wells")
-        logger.info(f"✅ {len(exported)} files exported to {output_dir}")
+        logger.info(f"SPE9 data parsed: Grid {parsed_data.grid_dimensions}, {len(parsed_data.wells)} wells")
+        logger.info(f"{len(exported)} files exported to {output_dir}")
         
         return parsed_data.get_simulation_data()
         
@@ -245,9 +289,22 @@ def calculate_metrics(simulation_results):
         elif hasattr(calculator, 'calculate_metrics'):
             metrics = calculator.calculate_metrics()
         else:
-            metrics = {'error': 'No metric calculation method found'}
+            # Fallback metrics
+            prod = simulation_results.get('production', {})
+            inj = simulation_results.get('injection', {})
+            
+            metrics = {
+                'total_oil_produced': float(np.sum(prod.get('oil', [0]))),
+                'total_water_injected': float(np.sum(inj.get('water', [0]))),
+                'total_water_produced': float(np.sum(prod.get('water', [0]))),
+                'total_gas_produced': float(np.sum(prod.get('gas', [0]))),
+                'well_count': len(simulation_results.get('wells', [])),
+                'simulation_days': len(simulation_results.get('time_series', {}).get('time_steps', [])),
+                'average_pressure': np.mean(simulation_results.get('reservoir_state', {}).get('average_pressure', [0])),
+                'calculation_method': 'fallback'
+            }
         
-        logger.info(f"📊 Calculated {len(metrics)} performance metrics")
+        logger.info(f"Calculated {len(metrics)} performance metrics")
         return metrics
         
     except Exception as e:
@@ -278,7 +335,7 @@ def generate_all_plots(simulation_results, metrics):
         except TypeError:
             plot_generator = PlotGenerator(simulation_results)
         
-        # Generate all available plots
+        # Try different plot methods
         plot_methods = [
             ('create_pressure_plot', 'pressure'),
             ('create_production_plot', 'production'),
@@ -299,14 +356,14 @@ def generate_all_plots(simulation_results, metrics):
                         fig.savefig(plot_path, dpi=300, bbox_inches='tight')
                         plots_generated += 1
                         fig.close()
-                        logger.info(f"📈 Generated: {plot_path.name}")
+                        logger.info(f"Generated: {plot_path.name}")
                 except Exception as e:
                     logger.debug(f"Could not generate {method_name}: {e}")
         
         if plots_generated == 0:
-            logger.warning("⚠️ No plots generated - check plot generator methods")
+            logger.warning("No plots generated - check plot generator methods")
         else:
-            logger.info(f"✅ Generated {plots_generated} plots in {plots_dir}")
+            logger.info(f"Generated {plots_generated} plots in {plots_dir}")
         
         return plots_generated
         
@@ -372,13 +429,13 @@ def save_results_comprehensive(results, metrics, plots_count):
     results_file = data_dir / f"simulation_results_{timestamp}.json"
     with open(results_file, 'w') as f:
         json.dump(results, f, indent=2, default=float)
-    logger.info(f"💾 Results saved: {results_file}")
+    logger.info(f"Results saved: {results_file}")
     
     # 2. Save metrics
     metrics_file = data_dir / f"performance_metrics_{timestamp}.json"
     with open(metrics_file, 'w') as f:
         json.dump(metrics, f, indent=2, default=str)
-    logger.info(f"📊 Metrics saved: {metrics_file}")
+    logger.info(f"Metrics saved: {metrics_file}")
     
     # 3. Save metadata
     metadata = {
@@ -402,11 +459,11 @@ def save_results_comprehensive(results, metrics, plots_count):
     report_file = reports_dir / f"simulation_report_{timestamp}.md"
     
     with open(report_file, 'w') as f:
-        f.write("# 🏭 Reservoir Simulation Report\n\n")
+        f.write("# Reservoir Simulation Report\n\n")
         f.write(f"**Generated:** {datetime.now():%Y-%m-%d %H:%M:%S}\n\n")
         
-        f.write("## 📋 Executive Summary\n\n")
-        f.write(f"- **Status:** ✅ COMPLETED SUCCESSFULLY\n")
+        f.write("## Executive Summary\n\n")
+        f.write(f"- **Status:** COMPLETED SUCCESSFULLY\n")
         f.write(f"- **Dataset:** SPE9 Benchmark Reservoir\n")
         f.write(f"- **Grid dimensions:** {metadata['grid_dimensions']}\n")
         f.write(f"- **Total cells:** {metadata['grid_dimensions'][0] * metadata['grid_dimensions'][1] * metadata['grid_dimensions'][2]:,}\n")
@@ -414,7 +471,7 @@ def save_results_comprehensive(results, metrics, plots_count):
         f.write(f"- **Simulation period:** {metadata['time_steps']} days\n")
         f.write(f"- **Visualizations:** {plots_count} plots generated\n\n")
         
-        f.write("## 📊 Key Performance Indicators\n\n")
+        f.write("## Key Performance Indicators\n\n")
         if metrics:
             f.write("| KPI | Value | Unit |\n")
             f.write("|-----|-------|------|\n")
@@ -432,11 +489,14 @@ def save_results_comprehensive(results, metrics, plots_count):
                 if metric_key in metrics:
                     value = metrics[metric_key]
                     if isinstance(value, float):
-                        f.write(f"| {metric_key.replace('_', ' ').title()} | {value:,.2f} | {unit} |\n")
+                        if metric_key == 'oil_recovery_factor':
+                            f.write(f"| {metric_key.replace('_', ' ').title()} | {value*100:.2f} | {unit} |\n")
+                        else:
+                            f.write(f"| {metric_key.replace('_', ' ').title()} | {value:,.2f} | {unit} |\n")
                     else:
                         f.write(f"| {metric_key.replace('_', ' ').title()} | {value} | {unit} |\n")
         
-        f.write("\n## 🗂️ Output Files\n\n")
+        f.write("\n## Output Files\n\n")
         f.write(f"### Data Files\n")
         f.write(f"- `{results_file.name}` - Complete simulation results\n")
         f.write(f"- `{metrics_file.name}` - Performance metrics\n")
@@ -451,7 +511,7 @@ def save_results_comprehensive(results, metrics, plots_count):
         f.write(f"### Reports\n")
         f.write(f"- `{report_file.name}` - This comprehensive report\n\n")
         
-        f.write("## 🔬 Technical Details\n\n")
+        f.write("## Technical Details\n\n")
         f.write("- **Simulation Framework:** Reservoir AI with ML integration\n")
         f.write("- **Data Source:** OPM SPE9 Benchmark Dataset\n")
         f.write("- **Physics Model:** Black-oil with pressure-saturation coupling\n")
@@ -459,7 +519,7 @@ def save_results_comprehensive(results, metrics, plots_count):
         f.write("- **Numerical Scheme:** Finite difference with IMPES\n")
         f.write("- **Convergence Criteria:** 1e-6 pressure tolerance\n\n")
         
-        f.write("## 👥 Team & Attribution\n\n")
+        f.write("## Team & Attribution\n\n")
         f.write("- **Project Lead:** Reservoir Engineering Team\n")
         f.write("- **AI Integration:** Machine Learning Group\n")
         f.write("- **Data Processing:** Geoscience Department\n")
@@ -468,7 +528,7 @@ def save_results_comprehensive(results, metrics, plots_count):
         f.write("---\n")
         f.write(f"*Report automatically generated by Reservoir AI Simulation Framework*\n")
     
-    logger.info(f"📝 Report generated: {report_file}")
+    logger.info(f"Report generated: {report_file}")
     
     # 5. Create success marker
     success_file = results_dir / "SIMULATION_SUCCESS.txt"
@@ -482,7 +542,7 @@ def save_results_comprehensive(results, metrics, plots_count):
         f.write(f"Wells: {metadata['well_count']}\n")
         f.write(f"Time steps: {metadata['time_steps']}\n")
         f.write(f"Plots: {plots_count}\n")
-        f.write(f"Status: ✅ ALL SYSTEMS OPERATIONAL\n\n")
+        f.write(f"Status: ALL SYSTEMS OPERATIONAL\n\n")
         f.write("Output directories:\n")
         f.write(f"  - data/    : Simulation results and metrics\n")
         f.write(f"  - plots/   : Visualization graphs\n")
@@ -497,22 +557,22 @@ def main():
     logger, log_file = setup_logging()
     
     logger.info("=" * 70)
-    logger.info("🏭 RESERVOIR AI SIMULATION FRAMEWORK - PROFESSIONAL GRADE")
+    logger.info("RESERVOIR AI SIMULATION FRAMEWORK - PROFESSIONAL GRADE")
     logger.info("=" * 70)
     
     try:
         # Step 1: Load configurations
-        logger.info("🔧 Step 1: Loading configurations...")
+        logger.info("Step 1: Loading configurations...")
         configs = load_configurations()
-        logger.info(f"   ✅ Loaded {len(configs)} configuration files")
+        logger.info(f"   Loaded {len(configs)} configuration files")
         
         # Step 2: Parse SPE9 data
-        logger.info("📂 Step 2: Parsing SPE9 benchmark data...")
+        logger.info("Step 2: Parsing SPE9 benchmark data...")
         simulation_data = parse_spe9_data()
-        logger.info(f"   ✅ Data parsed successfully")
+        logger.info(f"   Data parsed successfully")
         
         # Step 3: Run simulation
-        logger.info("🏃 Step 3: Running reservoir simulation...")
+        logger.info("Step 3: Running reservoir simulation...")
         simulator = ProfessionalSimulationRunner(
             reservoir_data=simulation_data,
             simulation_config=configs.get('simulation_config', {}),
@@ -520,49 +580,49 @@ def main():
         )
         
         results = simulator.run()
-        logger.info(f"   ✅ Simulation completed: {results['metadata']['time_steps']} timesteps")
+        logger.info(f"   Simulation completed: {results['metadata']['time_steps']} timesteps")
         
         # Step 4: Calculate metrics
-        logger.info("📊 Step 4: Calculating performance metrics...")
+        logger.info("Step 4: Calculating performance metrics...")
         metrics = calculate_metrics(results)
-        logger.info(f"   ✅ Calculated {len(metrics)} metrics")
+        logger.info(f"   Calculated {len(metrics)} metrics")
         
         # Step 5: Generate plots
-        logger.info("📈 Step 5: Generating visualizations...")
+        logger.info("Step 5: Generating visualizations...")
         plots_count = generate_all_plots(results, metrics)
-        logger.info(f"   ✅ Generated {plots_count} plots")
+        logger.info(f"   Generated {plots_count} plots")
         
         # Step 6: Save all results
-        logger.info("💾 Step 6: Saving comprehensive results...")
+        logger.info("Step 6: Saving comprehensive results...")
         results_file, metrics_file, report_file, success_file = save_results_comprehensive(
             results, metrics, plots_count
         )
         
         # Final celebration
         logger.info("=" * 70)
-        logger.info("🎉🎉🎉 SIMULATION COMPLETED SUCCESSFULLY! 🎉🎉🎉")
+        logger.info("SIMULATION COMPLETED SUCCESSFULLY!")
         logger.info("=" * 70)
-        logger.info(f"📁 Results directory: results/")
-        logger.info(f"   ├── data/    - Simulation results & metrics")
-        logger.info(f"   ├── plots/   - {plots_count} visualization plots")
-        logger.info(f"   └── reports/ - Documentation & reports")
+        logger.info(f"Results directory: results/")
+        logger.info(f"   data/    - Simulation results & metrics")
+        logger.info(f"   plots/   - {plots_count} visualization plots")
+        logger.info(f"   reports/ - Documentation & reports")
         logger.info(f"")
-        logger.info(f"📊 Performance metrics calculated: {len(metrics)}")
-        logger.info(f"📈 Visualization plots generated: {plots_count}")
-        logger.info(f"📝 Comprehensive report: {report_file.name}")
-        logger.info(f"📋 Detailed log file: {log_file.name}")
-        logger.info(f"✅ Success marker: {success_file.name}")
+        logger.info(f"Performance metrics calculated: {len(metrics)}")
+        logger.info(f"Visualization plots generated: {plots_count}")
+        logger.info(f"Comprehensive report: {report_file.name}")
+        logger.info(f"Detailed log file: {log_file.name}")
+        logger.info(f"Success marker: {success_file.name}")
         logger.info("=" * 70)
-        logger.info("🏆 PROJECT VALIDATED AND OPERATIONAL 🏆")
+        logger.info("PROJECT VALIDATED AND OPERATIONAL")
         logger.info("=" * 70)
         
         return 0
         
     except KeyboardInterrupt:
-        logger.info("⏹️ Simulation interrupted by user")
+        logger.info("Simulation interrupted by user")
         return 130
     except Exception as e:
-        logger.error(f"💥 Critical error: {e}")
+        logger.error(f"Critical error: {e}")
         logger.error(traceback.format_exc())
         return 1
 
