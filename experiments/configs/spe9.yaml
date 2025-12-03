@@ -1,0 +1,76 @@
+experiment_name: "spe9_reservoir_computing"
+random_seed: 42
+save_results: true
+results_dir: "results"
+
+model_type: "esn"
+optimize_hyperparameters: true
+
+esn_config:
+  n_reservoir: 1000
+  spectral_radius: 0.95
+  sparsity: 0.1
+  leaking_rate: 0.3
+  regularization: 1e-6
+  input_scaling: 1.0
+  reservoir_connectivity: "uniform"
+  activation_function: "tanh"
+  teacher_forcing: false
+  noise_level: 1e-6
+  warmup_steps: 100
+
+optimization_config:
+  n_calls: 50
+  n_initial_points: 10
+  random_state: 42
+  acq_func: "EI"
+  acq_optimizer: "auto"
+  patience: 10
+  min_delta: 1e-4
+  cv_folds: 3
+  validation_split: 0.2
+  
+  n_reservoir_range: [100, 2000]
+  spectral_radius_range: [0.5, 1.5]
+  sparsity_range: [0.01, 0.5]
+  leaking_rate_range: [0.01, 0.5]
+  regularization_range: [1e-8, 1e-2]
+  input_scaling_range: [0.1, 2.0]
+  
+  connectivity_options: ["uniform", "small_world", "scale_free"]
+  activation_options: ["tanh", "relu", "sigmoid"]
+
+data_config:
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  sequence_length: 30
+  forecast_horizon: 10
+  stride: 1
+  scaling_method: "standard"
+  remove_outliers: true
+  outlier_threshold: 3.0
+  fill_missing: true
+  interpolate_method: "linear"
+  normalize_time: true
+  add_derivatives: true
+  derivative_order: 1
+  
+  target_columns:
+    - "PRESSURE"
+    - "SATURATION"
+    - "PRODUCTION_RATE"
+  
+  input_columns:
+    - "TIME"
+    - "INJECTION_RATE"
+    - "BHP"
+    - "THP"
+
+evaluation_metrics:
+  - "nash_sutcliffe"
+  - "r2"
+  - "mape"
+  - "rmse"
+  - "forecast_skill_score_mean"
+  - "material_balance_error_pred"
