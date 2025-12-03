@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reservoir-ai-config
+  namespace: reservoir-ai
+data:
+  # MLflow configuration
+  MLFLOW_TRACKING_URI: "http://mlflow-service:5000"
+  MLFLOW_S3_ENDPOINT_URL: "http://minio-service:9000"
+  
+  # Model configuration
+  DEFAULT_MODEL_TYPE: "esn"
+  MAX_RESERVOIR_SIZE: "2000"
+  MIN_RESERVOIR_SIZE: "100"
+  
+  # Data processing
+  SEQUENCE_LENGTH: "30"
+  FORECAST_HORIZON: "10"
+  TRAIN_RATIO: "0.7"
+  
+  # Performance
+  BATCH_SIZE: "32"
+  MAX_CONCURRENT_REQUESTS: "100"
+  
+  # Logging
+  LOG_LEVEL: "INFO"
+  LOG_FORMAT: "json"
