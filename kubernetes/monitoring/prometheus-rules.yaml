@@ -1,0 +1,75 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: reservoir-ai-rules
+  namespace: reservoir-ai
+  labels:
+    app: reservoir-ai
+    release: prometheus
+spec:
+  groups:
+  - name: reservoir-ai-alerts
+    rules:
+    - alert: HighErrorRate
+      expr: rate(reservoir_ai_errors_total[5m]) > 0.01
+      for: 5m
+      labels:
+        severity: warning
+        component: api
+      annotations:
+        summary: "High error rate detected"
+        description: "Error rate is {{ $value }} per second, exceeding threshold of 0.01"
+        
+    - alert: HighLatency
+      expr: histogram_quantile(0.95, rate(reservoir_ai_request_duration_seconds_bucket[5m])) > 1
+      for: 5m
+      labels:
+        severity: warning
+        component: api
+      annotations:
+        summary: "High latency detected"
+        description: "95th percentile latency is {{ $value }} seconds"
+        
+    - alert: ModelMemoryHigh
+      expr: reservoir_ai_model_memory_bytes / 1024 / 1024 / 1024 > 2
+      for: 10m
+      labels:
+        severity: warning
+        component: models
+      annotations:
+        summary: "Model memory usage high"
+        description: "Model memory usage is {{ $value }} GB"
+        
+    - alert: NoSuccessfulPredictions
+      expr: rate(reservoir_ai_predictions_total[15m]) == 0
+      for: 15m
+      labels:
+        severity: critical
+        component: api
+      annotations:
+        summary: "No successful predictions"
+        description: "No successful predictions in the last 15 minutes"
+        
+    - alert: CPUThrottlingHigh
+      expr: rate(container_cpu_cfs_throttled_seconds_total{container="api"}[5m]) > 0.1
+      for: 5m
+      labels:
+        severity: warning
+        component: infrastructure
+      annotations:
+        summary: "High CPU throttling"
+        description: "CPU throttling is {{ $value }}"
+        
+  - name: reservoir-ai-metrics
+    rules:
+    - record: job:reservoir_ai:error_rate:rate5m
+      expr: rate(reservoir_ai_errors_total[5m])
+      
+    - record: job:reservoir_ai:prediction_rate:rate5m
+      expr: rate(reservoir_ai_predictions_total[5m])
+      
+    - record: job:reservoir_ai:request_duration:quantile95
+      expr: histogram_quantile(0.95, rate(reservoir_ai_request_duration_seconds_bucket[5m]))
+      
+    - record: job:reservoir_ai:memory_usage_percent
+      expr: reservoir_ai_model_memory_bytes / container_memory_working_set_bytes{container="api"}
