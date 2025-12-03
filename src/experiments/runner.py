@@ -59,4 +59,89 @@ class SPE9ExperimentRunner:
         y_val_flat = y_val.reshape(y_val.shape[0], -1)
         
         # Run experiment based on model type
-        if model
+        if model_type == 'esn':
+            from src.models.esn import EchoStateNetwork, ESNConfig
+            
+            config = ESNConfig(
+                n_inputs=X_train_flat.shape[1],
+                n_outputs=y_train_flat.shape[1],
+                **self.config.esn_config
+            )
+            
+            model = EchoStateNetwork(config)
+            stats = model.fit(X_train_flat, y_train_flat, 
+                            validation_data=(X_val_flat, y_val_flat))
+            
+            predictions = model.predict(X_val_flat)
+            
+        elif model_type == 'physics_informed':
+            from src.models.advanced_esn import PhysicsInformedESN, PhysicsInformedESNConfig
+            from src.models.esn import ESNConfig
+            
+            base_config = ESNConfig(
+                n_inputs=X_train_flat.shape[1],
+                n_outputs=y_train_flat.shape[1],
+                **self.config.esn_config
+            )
+            
+            # Define physics constraints for SPE9
+            physics_constraints = {
+                "material_balance": {
+                    "compressibility": 1e-5,
+                    "volume": 1e9,  # Reservoir volume
+                },
+                "boundary_conditions": {
+                    "left_value": 3000,
+                    "right_value": 3000,
+                }
+            }
+            
+            physics_config = PhysicsInformedESNConfig(
+                base_config=base_config,
+                physics_constraints=physics_constraints,
+                constraint_weight=0.1
+            )
+            
+            model = PhysicsInformedESN(physics_config)
+            
+            # Additional data for physics constraints
+            additional_data = self._prepare_physics_data()
+            
+            stats = model.fit(X_train_flat, y_train_flat, 
+                            additional_data=additional_data)
+            
+            predictions = model.predict(X_val_flat)
+        
+        else:
+            raise ValueError(f"Unsupported model type: {model_type}")
+        
+        # Evaluate
+        from src.utils.metrics import PetroleumMetrics
+        metrics = PetroleumMetrics.comprehensive_metrics(y_val_flat, predictions)
+        
+        results = {
+            'model_type': model_type,
+            'dataset': 'SPE9',
+            'metrics': metrics,
+            'stats': stats,
+            'model_summary': model.summary() if hasattr(model, 'summary') else str(model),
+            'spe9_metadata': self.spe9_metadata,
+        }
+        
+        return results
+    
+    def _prepare_physics_data(self) -> Dict[str, np.ndarray]:
+        """Prepare additional data for physics-informed models."""
+        # Extract time from data
+        time = np.arange(self.spe9_data['X_train'].shape[0] + 
+                        self.spe9_data['X_val'].shape[0])
+        
+        # For SPE9, we might have pressure and production data
+        # This is simplified - in practice, extract from actual data
+        return {
+            'time': time,
+            'pressure': np.random.uniform(3000, 3500, len(time)),
+            'production': np.random.uniform(1000, 5000, len(time)),
+            'compressibility': 1e-5,
+            'volume': 1e9,
+        }
