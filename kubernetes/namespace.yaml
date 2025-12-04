@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: reservoir-ai
-  labels:
-    name: reservoir-ai
-    environment: production
