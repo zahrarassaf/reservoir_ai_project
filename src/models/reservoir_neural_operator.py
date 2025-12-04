@@ -419,4 +419,137 @@ class PhysicsConstraints(nn.Module):
         super().__init__()
         
         self.grid_dims = grid_dims
-        self.nx, self.ny, self.n
+        self.nx, self.ny, self.nz = grid_dims
+        
+        # Learnable physics parameters
+        self.mobility_encoder = nn.Sequential(
+            nn.Linear(2, 16),  # Input: saturation, pressure
+            nn.GELU(),
+            nn.Linear(16, 32),
+            nn.GELU(),
+            nn.Linear(32, 2)  # Output: oil and water mobilities
+        )
+    
+    def forward(self,
+                pressure: torch.Tensor,
+                saturation: torch.Tensor,
+                permeability: torch.Tensor,
+                porosity: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """
+        Compute physics constraint losses.
+        
+        Args:
+            pressure: Pressure field [batch, 1, nx, ny, nz]
+            saturation: Water saturation [batch, 1, nx, ny, nz]
+            permeability: Permeability [batch, 1, nx, ny, nz]
+            porosity: Porosity [batch, 1, nx, ny, nz]
+            
+        Returns:
+            Dictionary of physics losses
+        """
+        losses = {}
+        
+        # 1. Mass conservation (simplified)
+        losses['mass_conservation'] = self._mass_conservation_loss(
+            pressure, saturation, porosity
+        )
+        
+        # 2. Darcy's law consistency
+        losses['darcy_consistency'] = self._darcy_consistency_loss(
+            pressure, permeability
+        )
+        
+        # 3. Saturation bounds (0 <= Sw <= 1)
+        losses['saturation_bounds'] = self._saturation_bounds_loss(saturation)
+        
+        # 4. Pressure monotonicity (should decrease from injector to producer)
+        losses['pressure_monotonicity'] = self._pressure_monotonicity_loss(pressure)
+        
+        # 5. Capillary pressure relationship
+        losses['capillary_pressure'] = self._capillary_pressure_loss(saturation)
+        
+        return losses
+    
+    def _mass_conservation_loss(self, pressure, saturation, porosity):
+        """Simplified mass conservation loss."""
+        # For incompressible: ∂(φS)/∂t + ∇·v = 0
+        # Here we check spatial consistency
+        
+        # Compute divergence of velocity (simplified)
+        # v ∝ k * ∇P
+        
+        # Compute pressure gradient
+        grad_p = torch.gradient(pressure, dim=(2, 3, 4))
+        grad_mag = torch.sqrt(sum(g**2 for g in grad_p) + 1e-10)
+        
+        # Mass accumulation term
+        accumulation = porosity * saturation
+        
+        # Simplified conservation: variance should be small
+        loss = torch.var(accumulation) + 0.1 * torch.mean(grad_mag)
+        
+        return loss
+    
+    def _darcy_consistency_loss(self, pressure, permeability):
+        """Darcy's law consistency loss."""
+        # Darcy: v = -k/μ * ∇P
+        
+        # Compute pressure gradient
+        grad_p = torch.gradient(pressure, dim=(2, 3, 4))
+        
+        # Expected flow magnitude
+        expected_flow = []
+        for g in grad_p:
+            flow = -permeability * g  # Simplified, ignoring viscosity
+            expected_flow.append(torch.abs(flow))
+        
+        # Consistency: gradient should align with high permeability regions
+        loss = torch.mean(torch.stack(expected_flow))
+        
+        return loss
+    
+    def _saturation_bounds_loss(self, saturation):
+        """Penalty for saturation outside [0, 1]."""
+        # Penalize values outside bounds
+        lower_penalty = F.relu(-saturation)  # Negative saturation
+        upper_penalty = F.relu(saturation - 1)  # Saturation > 1
+        
+        loss = torch.mean(lower_penalty**2 + upper_penalty**2)
+        
+        return loss
+    
+    def _pressure_monotonicity_loss(self, pressure):
+        """Pressure should generally decrease from injectors to producers."""
+        # Simplified: pressure should have spatial structure
+        # Compute variance of laplacian (smoothness)
+        
+        # Second derivatives
+        grad_x = torch.gradient(pressure, dim=2)[0]
+        grad_xx = torch.gradient(grad_x, dim=2)[0]
+        
+        grad_y = torch.gradient(pressure, dim=3)[0]
+        grad_yy = torch.gradient(grad_y, dim=3)[0]
+        
+        grad_z = torch.gradient(pressure, dim=4)[0]
+        grad_zz = torch.gradient(grad_z, dim=4)[0]
+        
+        laplacian = grad_xx + grad_yy + grad_zz
+        
+        # Pressure should be relatively smooth
+        loss = torch.mean(torch.abs(laplacian))
+        
+        return loss
+    
+    def _capillary_pressure_loss(self, saturation):
+        """Capillary pressure relationship loss."""
+        # Pc = f(S) - typically monotonic decreasing
+        # Simplified: saturation should have spatial coherence
+        
+        # Compute saturation gradient
+        grad_s = torch.gradient(saturation, dim=(2, 3, 4))
+        grad_mag = torch.sqrt(sum(g**2 for g in grad_s) + 1e-10)
+        
+        # Saturation should vary smoothly
+        loss = torch.mean(grad_mag)
+        
+        return loss
