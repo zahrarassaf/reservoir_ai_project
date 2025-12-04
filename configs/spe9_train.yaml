@@ -1,0 +1,90 @@
+# configs/spe9_train.yaml
+# Training configuration for SPE9 Reservoir Neural Operator
+
+experiment:
+  name: "spe9_rno_experiment"
+  description: "Physics-Informed Neural Operator for SPE9 Reservoir"
+  output_dir: "experiments"
+  
+dataset:
+  sequence_length: 10
+  prediction_horizon: 1
+  stride: 1
+  normalize: true
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  
+model:
+  # Architecture
+  type: "reservoir_neural_operator"
+  input_channels: 2  # pressure + saturation
+  output_channels: 2  # pressure + saturation
+  hidden_channels: 64
+  num_fno_layers: 4
+  fno_modes: 12
+  use_attention: true
+  
+  # Physics
+  physics_weight: 0.1
+  enforce_mass_conservation: true
+  enforce_darcy_law: true
+  enforce_bounds: true
+  
+  # Initialization
+  initialization: "kaiming"
+  
+training:
+  # Optimization
+  epochs: 200
+  batch_size: 4  # Reduced for 3D grid memory
+  learning_rate: 1e-3
+  weight_decay: 1e-4
+  optimizer: "adamw"
+  grad_clip: 1.0
+  
+  # Scheduler
+  scheduler:
+    type: "cosine"
+    warmup_epochs: 10
+    min_lr: 1e-6
+  
+  # Early stopping
+  patience: 30
+  save_every: 10
+  
+  # Distributed
+  distributed: false
+  num_workers: 4
+  pin_memory: true
+  
+  # Device
+  device: "cuda"  # or "cpu"
+  
+evaluation:
+  # Metrics
+  metrics:
+    - "mse"
+    - "mae"
+    - "rmse"
+    - "r2"
+    - "physics_violation"
+    
+  # Physics thresholds
+  physics_thresholds:
+    mass_balance_error: 0.01  # 1%
+    darcy_violation: 0.05
+    saturation_bounds: 0.001
+    
+logging:
+  # TensorBoard
+  tensorboard: true
+  log_interval: 10
+  
+  # Checkpoints
+  save_checkpoints: true
+  keep_checkpoints: 5
+  
+  # Visualization
+  save_visualizations: true
+  viz_interval: 50
