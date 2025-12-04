@@ -468,4 +468,72 @@ class SPE9Experiment:
         summary.append("")
         summary.append("PERFORMANCE METRICS:")
         summary.append("-" * 40)
-        summary.append(f"Final Validation Loss
+        summary.append(f"Final Validation Loss: {results['validation']['test_loss']:.6f}")
+        
+        if 'physics_metrics' in results['validation']:
+            physics_metrics = results['validation']['physics_metrics']
+            for metric, value in physics_metrics.items():
+                summary.append(f"{metric}: {value:.6f}")
+        
+        if 'benchmarks' in results and results['benchmarks']:
+            summary.append("")
+            summary.append("INDUSTRY BENCHMARKS:")
+            summary.append("-" * 40)
+            for benchmark, value in results['benchmarks'].items():
+                if isinstance(value, dict):
+                    for k, v in value.items():
+                        summary.append(f"{benchmark}.{k}: {v}")
+                else:
+                    summary.append(f"{benchmark}: {value}")
+        
+        summary.append("")
+        summary.append("=" * 80)
+        
+        return "\n".join(summary)
+    
+    def log(self, message: str):
+        """Log message to file and console."""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_message = f"[{timestamp}] {message}"
+        
+        print(log_message)
+        
+        with open(self.log_file, 'a') as f:
+            f.write(log_message + "\n")
+        
+        if self.wandb:
+            self.wandb.log({'log_message': message})
+
+
+def run_spe9_experiment(config_path: Optional[str] = None, 
+                       config_dict: Optional[Dict] = None) -> Dict[str, Any]:
+    """
+    Main function to run SPE9 experiment.
+    
+    Args:
+        config_path: Path to YAML configuration file
+        config_dict: Configuration dictionary
+        
+    Returns:
+        Experiment results
+    """
+    # Load configuration
+    if config_path:
+        config = ExperimentConfig.load(config_path)
+    elif config_dict:
+        config = ExperimentConfig(**config_dict)
+    else:
+        # Default configuration
+        config = ExperimentConfig()
+    
+    # Create and run experiment
+    experiment = SPE9Experiment(config)
+    results = experiment.run()
+    
+    return results
+
+
+if __name__ == "__main__":
+    # Example usage
+    results = run_spe9_experiment()
+    print("Experiment completed successfully!")
