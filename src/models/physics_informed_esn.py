@@ -1,4 +1,4 @@
-
+# src/models/physics_informed_esn.py - FIXED
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -242,4 +242,89 @@ class BayesianLinear(nn.Module):
         self.weight_rho = nn.Parameter(torch.Tensor(out_features, in_features))
         
         # Bias parameters
-        self.bias_mu = nn.Parameter(torch.Tensor(out_features
+        self.bias_mu = nn.Parameter(torch.Tensor(out_features))
+        self.bias_rho = nn.Parameter(torch.Tensor(out_features))
+        
+        # Prior
+        self.prior_sigma = prior_sigma
+        
+        # Initialize
+        self.reset_parameters()
+    
+    def reset_parameters(self):
+        nn.init.kaiming_uniform_(self.weight_mu, a=math.sqrt(5))
+        nn.init.constant_(self.weight_rho, -3.0)
+        
+        fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight_mu)
+        bound = 1 / math.sqrt(fan_in)
+        nn.init.uniform_(self.bias_mu, -bound, bound)
+        nn.init.constant_(self.bias_rho, -3.0)
+    
+    def forward(self, x):
+        """Forward with reparameterization."""
+        # Sample weights
+        weight_sigma = torch.log1p(torch.exp(self.weight_rho))
+        weight_epsilon = torch.randn_like(self.weight_mu)
+        weight = self.weight_mu + weight_sigma * weight_epsilon
+        
+        # Sample bias
+        bias_sigma = torch.log1p(torch.exp(self.bias_rho))
+        bias_epsilon = torch.randn_like(self.bias_mu)
+        bias = self.bias_mu + bias_sigma * bias_epsilon
+        
+        # KL divergence
+        kl_div = self._kl_divergence(
+            self.weight_mu, weight_sigma,
+            self.bias_mu, bias_sigma
+        )
+        
+        # Linear operation
+        output = F.linear(x, weight, bias)
+        
+        return output, kl_div
+    
+    def _kl_divergence(self, w_mu, w_sigma, b_mu, b_sigma):
+        """KL divergence with Gaussian prior."""
+        # Prior: N(0, prior_sigma^2)
+        # Posterior: N(mu, sigma^2)
+        
+        w_kl = torch.log(self.prior_sigma / w_sigma) + \
+               (w_sigma**2 + w_mu**2) / (2 * self.prior_sigma**2) - 0.5
+        
+        b_kl = torch.log(self.prior_sigma / b_sigma) + \
+               (b_sigma**2 + b_mu**2) / (2 * self.prior_sigma**2) - 0.5
+        
+        return w_kl.sum() + b_kl.sum()
+
+class MultiHeadAttention(nn.Module):
+    """Multi-head attention for reservoir."""
+    
+    def __init__(self, embed_dim, num_heads, dropout=0.1):
+        super().__init__()
+        
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        
+        self.qkv = nn.Linear(embed_dim, 3 * embed_dim)
+        self.proj = nn.Linear(embed_dim, embed_dim)
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, x):
+        batch_size, seq_len, embed_dim = x.shape
+        
+        qkv = self.qkv(x).reshape(
+            batch_size, seq_len, 3, self.num_heads, self.head_dim
+        ).permute(2, 0, 3, 1, 4)
+        
+        q, k, v = qkv[0], qkv[1], qkv[2]
+        
+        # Attention
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        attn = F.softmax(scores, dim=-1)
+        attn = self.dropout(attn)
+        
+        out = torch.matmul(attn, v)
+        out = out.transpose(1, 2).reshape(batch_size, seq_len, embed_dim)
+        
+        return self.proj(out)
