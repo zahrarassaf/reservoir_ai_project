@@ -1,4 +1,4 @@
-# scripts/analyze_spe9_data.py
+
 import tarfile
 import os
 import pandas as pd
