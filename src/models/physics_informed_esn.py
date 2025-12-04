@@ -1,20 +1,15 @@
-"""
-Physics-Informed Echo State Network for reservoir simulation.
-Combines ESN dynamics with physics constraints.
-"""
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from typing import Dict, Tuple, Optional, List
+from typing import Dict, Tuple, Optional
 from dataclasses import dataclass
-from scipy.sparse import random
-
+import math
 
 @dataclass
 class PIESNConfig:
-    """Configuration for Physics-Informed ESN."""
+    """PhD-level PI-ESN configuration."""
     reservoir_size: int = 1000
     spectral_radius: float = 0.95
     input_scaling: float = 1.0
@@ -25,41 +20,28 @@ class PIESNConfig:
     use_attention: bool = True
     attention_heads: int = 4
     dropout_rate: float = 0.1
-
+    use_bayesian: bool = True
 
 class PhysicsInformedESN(nn.Module):
-    """Physics-Informed Echo State Network."""
+    """PhD-level Physics-Informed Echo State Network."""
     
-    def __init__(self, input_dim: int, output_dim: int, 
-                 config: PIESNConfig, physics_module=None):
-        """
-        Initialize Physics-Informed ESN.
-        
-        Args:
-            input_dim: Dimension of input data
-            output_dim: Dimension of output predictions
-            config: Model configuration
-            physics_module: Physics constraints module
-        """
+    def __init__(self, input_dim: int, output_dim: int, config: PIESNConfig):
         super().__init__()
+        
         self.config = config
         self.input_dim = input_dim
         self.output_dim = output_dim
-        self.physics_module = physics_module
         
-        # Initialize reservoir weights
+        # Echo State Reservoir
         self.W_in = self._initialize_input_weights()
         self.W_res = self._initialize_reservoir_weights()
-        self.W_feedback = None  # For output feedback
+        self.W_fb = None  # Optional feedback
         
-        # Reservoir state
-        self.register_buffer('reservoir_state', 
-                           torch.zeros(config.reservoir_size))
+        # Physics-aware components
+        self.physics_encoder = PhysicsEncoder(reservoir_size=config.reservoir_size)
+        self.physics_constraints = PhysicsConstraints()
         
-        # Output layer (trained)
-        self.output_layer = nn.Linear(config.reservoir_size, output_dim)
-        
-        # Attention mechanism for physics guidance
+        # Attention mechanism
         if config.use_attention:
             self.attention = MultiHeadAttention(
                 config.reservoir_size, 
@@ -67,195 +49,197 @@ class PhysicsInformedESN(nn.Module):
                 dropout=config.dropout_rate
             )
         
-        # Physics conditioning network
-        self.physics_conditioner = nn.Sequential(
-            nn.Linear(config.reservoir_size, 128),
-            nn.LayerNorm(128),
-            nn.GELU(),
-            nn.Dropout(config.dropout_rate),
-            nn.Linear(128, config.reservoir_size)
-        )
+        # Bayesian output layer for uncertainty
+        if config.use_bayesian:
+            self.output_layer = BayesianLinear(
+                config.reservoir_size, 
+                output_dim,
+                prior_sigma=1.0
+            )
+        else:
+            self.output_layer = nn.Linear(config.reservoir_size, output_dim)
         
-    def _initialize_input_weights(self) -> torch.Tensor:
-        """Initialize input weights with scaling."""
-        W_in = torch.randn(self.config.reservoir_size, self.input_dim)
-        return W_in * self.config.input_scaling
+        # Dropout for MC sampling
+        self.dropout = nn.Dropout(config.dropout_rate)
+        
+        # Reservoir state
+        self.register_buffer('initial_state', torch.zeros(config.reservoir_size))
+        
+    def _initialize_input_weights(self):
+        """Initialize with spectral radius control."""
+        weights = torch.randn(self.config.reservoir_size, self.input_dim)
+        return nn.Parameter(weights * self.config.input_scaling, requires_grad=False)
     
-    def _initialize_reservoir_weights(self) -> torch.Tensor:
-        """Initialize sparse reservoir weights with spectral radius control."""
-        # Create sparse random matrix
-        connectivity = self.config.connectivity
+    def _initialize_reservoir_weights(self):
+        """Initialize sparse reservoir with spectral radius."""
         n = self.config.reservoir_size
         
-        # Generate sparse matrix
-        indices = torch.randperm(n * n)[:int(connectivity * n * n)]
-        rows = indices // n
-        cols = indices % n
+        # Create sparse matrix
+        mask = (torch.rand(n, n) < self.config.connectivity).float()
+        weights = torch.randn(n, n) * 0.1
+        weights = weights * mask
         
-        values = torch.randn(len(rows)) * 0.1
-        W_res = torch.sparse_coo_tensor(
-            torch.stack([rows, cols]), 
-            values, 
-            (n, n)
-        ).to_dense()
-        
-        # Ensure sparsity pattern
-        mask = (torch.rand(n, n) < connectivity).float()
-        W_res = W_res * mask
-        
-        # Scale to desired spectral radius
+        # Ensure spectral radius
         if self.config.spectral_radius > 0:
-            eigenvalues = torch.linalg.eigvals(W_res)
-            spectral_radius = torch.max(torch.abs(eigenvalues))
-            W_res = W_res * (self.config.spectral_radius / (spectral_radius + 1e-10))
+            eigenvalues = torch.linalg.eigvals(weights)
+            current_radius = torch.max(torch.abs(eigenvalues))
+            weights = weights * (self.config.spectral_radius / (current_radius + 1e-10))
         
-        return W_res
+        return nn.Parameter(weights, requires_grad=False)
     
-    def forward(self, x: torch.Tensor, 
-                physics_state: Optional[Dict] = None) -> Tuple[torch.Tensor, Dict]:
-        """
-        Forward pass with physics constraints.
+    def forward(self, x: torch.Tensor, return_physics: bool = False) -> Tuple[torch.Tensor, Dict]:
+        """Forward pass with physics constraints."""
+        batch_size, seq_len, _ = x.shape
         
-        Args:
-            x: Input tensor [batch_size, input_dim]
-            physics_state: Optional physics state information
-            
-        Returns:
-            predictions: Output predictions
-            diagnostics: Dictionary with internal states and losses
-        """
-        batch_size = x.shape[0]
-        
-        # Initialize batch reservoir states
-        reservoir_states = torch.zeros(batch_size, self.config.reservoir_size, 
-                                      device=x.device)
-        
-        # Store states for analysis
-        states_history = []
+        # Initialize reservoir states
+        states = self.initial_state.unsqueeze(0).repeat(batch_size, 1)
+        state_history = []
         physics_losses = []
         
-        # Time steps (assuming temporal dimension in features)
-        for t in range(x.shape[1] if x.dim() > 2 else 1):
-            if x.dim() > 2:
-                x_t = x[:, t, :]
-            else:
-                x_t = x
+        # Process sequence
+        for t in range(seq_len):
+            x_t = x[:, t, :]
             
-            # Update reservoir state
+            # Reservoir update
             input_term = torch.matmul(x_t, self.W_in.T)
-            reservoir_term = torch.matmul(reservoir_states, self.W_res.T)
+            reservoir_term = torch.matmul(states, self.W_res.T)
             
-            # Apply attention if enabled
+            # Attention on reservoir states
             if self.config.use_attention:
-                reservoir_states = self.attention(reservoir_states)
+                states_reshaped = states.unsqueeze(1)  # [batch, 1, features]
+                states = self.attention(states_reshaped).squeeze(1)
             
-            # Physics conditioning
-            if physics_state is not None and self.physics_module is not None:
-                physics_signal = self.physics_conditioner(reservoir_states)
-                physics_loss = self._compute_physics_loss(
-                    reservoir_states, physics_state
-                )
+            # Physics encoding
+            physics_features = self.physics_encoder(states)
+            
+            # Apply physics constraints
+            if return_physics:
+                physics_loss = self.physics_constraints(physics_features, x_t)
                 physics_losses.append(physics_loss)
-                
-                # Add physics guidance
-                reservoir_states = reservoir_states + self.config.physics_weight * physics_signal
             
             # Leaky integration
-            new_state = (1 - self.config.leak_rate) * reservoir_states + \
-                       self.config.leak_rate * torch.tanh(
-                           input_term + reservoir_term
-                       )
+            new_state = (1 - self.config.leak_rate) * states + \
+                       self.config.leak_rate * torch.tanh(input_term + reservoir_term + physics_features)
             
-            reservoir_states = new_state
-            states_history.append(reservoir_states.detach())
+            # Apply dropout (enabled for MC uncertainty)
+            if self.training or return_physics:
+                new_state = self.dropout(new_state)
+            
+            states = new_state
+            state_history.append(states)
         
         # Generate output
-        predictions = self.output_layer(reservoir_states)
+        if self.config.use_bayesian:
+            predictions, kl_div = self.output_layer(states)
+        else:
+            predictions = self.output_layer(states)
+            kl_div = torch.tensor(0.0)
         
         # Prepare diagnostics
-        diagnostics = {
-            'reservoir_states': torch.stack(states_history),
-            'physics_losses': torch.stack(physics_losses) if physics_losses else None,
-            'spectral_radius': self._compute_effective_spectral_radius(),
-            'memory_capacity': self._estimate_memory_capacity(states_history)
-        }
+        diagnostics = {}
+        if return_physics:
+            diagnostics = {
+                'reservoir_states': torch.stack(state_history, dim=1),
+                'physics_loss': torch.stack(physics_losses).mean() if physics_losses else torch.tensor(0.0),
+                'kl_divergence': kl_div,
+                'spectral_properties': self._analyze_spectral_properties()
+            }
         
         return predictions, diagnostics
     
-    def _compute_physics_loss(self, reservoir_states: torch.Tensor,
-                            physics_state: Dict) -> torch.Tensor:
-        """Compute physics constraint loss."""
-        if self.physics_module is None:
-            return torch.tensor(0.0, device=reservoir_states.device)
-        
-        # Decode physics-relevant information from reservoir
-        # This is problem-specific
-        if 'pressure' in physics_state and 'saturation' in physics_state:
-            # For reservoir simulation
-            physics_loss = self.physics_module.darcy_loss(
-                physics_state['pressure'],
-                physics_state['saturation']
-            )
-        else:
-            # Generic regularization
-            physics_loss = torch.norm(reservoir_states, p=2)
-        
-        return physics_loss
-    
-    def _compute_effective_spectral_radius(self) -> float:
-        """Compute effective spectral radius of reservoir."""
+    def _analyze_spectral_properties(self):
+        """Analyze reservoir spectral properties."""
         with torch.no_grad():
             eigenvalues = torch.linalg.eigvals(self.W_res)
-            return torch.max(torch.abs(eigenvalues)).item()
-    
-    def _estimate_memory_capacity(self, states_history: List[torch.Tensor]) -> float:
-        """Estimate memory capacity using linear memory task."""
-        # Simplified memory capacity estimation
-        if len(states_history) < 2:
-            return 0.0
+            spectral_radius = torch.max(torch.abs(eigenvalues))
+            
+            # Lyapunov exponent approximation
+            jacobian_norm = torch.norm(self.W_res)
+            lyapunov = torch.log(jacobian_norm)
         
-        states = torch.stack(states_history)
-        autocorrelation = torch.corrcoef(states.flatten().unsqueeze(0))[0, 1]
-        
-        return autocorrelation.item()
+        return {
+            'spectral_radius': spectral_radius.item(),
+            'lyapunov_exponent': lyapunov.item(),
+            'connectivity': (self.W_res != 0).float().mean().item()
+        }
 
-
-class MultiHeadAttention(nn.Module):
-    """Multi-head attention for reservoir state refinement."""
+class PhysicsEncoder(nn.Module):
+    """Encode physics constraints into reservoir."""
     
-    def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.1):
+    def __init__(self, reservoir_size: int, hidden_dim: int = 128):
         super().__init__()
-        self.embed_dim = embed_dim
-        self.num_heads = num_heads
-        self.head_dim = embed_dim // num_heads
         
-        assert self.head_dim * num_heads == embed_dim, \
-            "Embedding dimension must be divisible by number of heads"
-        
-        self.qkv_proj = nn.Linear(embed_dim, 3 * embed_dim)
-        self.output_proj = nn.Linear(embed_dim, embed_dim)
-        self.dropout = nn.Dropout(dropout)
+        self.encoder = nn.Sequential(
+            nn.Linear(reservoir_size, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, reservoir_size)
+        )
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply multi-head attention."""
-        batch_size, seq_len, embed_dim = x.shape
+        return self.encoder(x)
+
+class PhysicsConstraints(nn.Module):
+    """Physics constraints loss computation."""
+    
+    def __init__(self):
+        super().__init__()
         
-        # Project to Q, K, V
-        qkv = self.qkv_proj(x).reshape(
-            batch_size, seq_len, 3, self.num_heads, self.head_dim
-        )
-        q, k, v = qkv.unbind(2)
+    def forward(self, reservoir_states: torch.Tensor, inputs: torch.Tensor) -> torch.Tensor:
+        """Compute physics constraint losses."""
+        # Mass conservation constraint
+        mass_loss = self._mass_conservation(reservoir_states, inputs)
         
-        # Scaled dot-product attention
-        scores = torch.einsum('bqhd,bkhd->bhqk', q, k) / (self.head_dim ** 0.5)
-        attn = F.softmax(scores, dim=-1)
-        attn = self.dropout(attn)
+        # Energy/entropy constraint
+        energy_loss = self._energy_constraint(reservoir_states)
         
-        # Apply attention to values
-        out = torch.einsum('bhqk,bkhd->bqhd', attn, v)
-        out = out.reshape(batch_size, seq_len, embed_dim)
+        # Smoothness constraint
+        smoothness_loss = self._smoothness_constraint(reservoir_states)
         
-        # Final projection
-        out = self.output_proj(out)
+        total_loss = mass_loss + energy_loss + smoothness_loss
         
-        return out
+        return total_loss
+    
+    def _mass_conservation(self, states, inputs):
+        """Mass conservation loss."""
+        # Simplified: states should preserve "mass" in some sense
+        mass = torch.sum(states, dim=-1)
+        mass_variance = torch.var(mass)
+        
+        return mass_variance * 0.1
+    
+    def _energy_constraint(self, states):
+        """Energy/entropy constraint."""
+        # States should have bounded energy
+        energy = torch.norm(states, dim=-1)
+        energy_mean = torch.mean(energy)
+        
+        # Penalize extreme energies
+        return torch.abs(energy_mean - 1.0)
+    
+    def _smoothness_constraint(self, states):
+        """Spatial/temporal smoothness."""
+        # States should vary smoothly
+        if len(states.shape) > 1:
+            diff = torch.diff(states, dim=0)
+            smoothness = torch.mean(torch.abs(diff))
+            return smoothness * 0.01
+        return torch.tensor(0.0)
+
+class BayesianLinear(nn.Module):
+    """Bayesian linear layer for uncertainty."""
+    
+    def __init__(self, in_features, out_features, prior_sigma=1.0):
+        super().__init__()
+        
+        self.in_features = in_features
+        self.out_features = out_features
+        
+        # Weight parameters
+        self.weight_mu = nn.Parameter(torch.Tensor(out_features, in_features))
+        self.weight_rho = nn.Parameter(torch.Tensor(out_features, in_features))
+        
+        # Bias parameters
+        self.bias_mu = nn.Parameter(torch.Tensor(out_features
