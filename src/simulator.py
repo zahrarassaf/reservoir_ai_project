@@ -521,90 +521,83 @@ class ReservoirSimulator:
         
         return sensitivity_results
     
-    def export_results(self, output_path: str = './outputs'):
-        """Export simulation results"""
-        import json
-        import pickle
-        from pathlib import Path
-        
-        output_dir = Path(output_path)
-        output_dir.mkdir(exist_ok=True, parents=True)
-        
-        timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
-        
-        # Export as JSON
-        json_path = output_dir / f'simulation_results_{timestamp}.json'
-        
-        def convert_for_json(obj):
-            """Convert objects to JSON serializable format"""
-            if isinstance(obj, (np.ndarray, pd.Series)):
-                return obj.tolist()
-            elif isinstance(obj, pd.DataFrame):
-                return obj.to_dict()
-            elif isinstance(obj, (pd.Timestamp, np.datetime64)):
-                return str(obj)
-            elif isinstance(obj, dict):
-                return {k: convert_for_json(v) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [convert_for_json(item) for item in obj]
-            elif isinstance(obj, (np.float32, np.float64)):
-                return float(obj)
-            elif isinstance(obj, (np.int32, np.int64)):
-                return int(obj)
-            else:
-                return obj
-        
-        json_results = convert_for_json(self.results)
-        
-        with open(json_path, 'w') as f:
-            json.dump(json_results, f, indent=2)
-        
-        # Export as pickle
-        pickle_path = output_dir / f'simulation_results_{timestamp}.pkl'
-        with open(pickle_path, 'wb') as f:
-            pickle.dump(self.results, f)
-        
-        # Export summary CSV
-        summary_data = []
-        
-        # Economic summary
-        econ = self.results.get('economic_analysis', {})
-        if econ:
-            summary_data.append({
-                'category': 'economics',
-                'metric': 'npv_usd',
-                'value': econ.get('npv', 'N/A')
-            })
-            summary_data.append({
-                'category': 'economics',
-                'metric': 'irr_percent',
-                'value': econ.get('irr', 'N/A') * 100 if econ.get('irr') else 'N/A'
-            })
-        
-        # Production summary
-        prod = self.results.get('production_forecast', {})
-        if prod and 'statistics' in prod:
-            stats = prod['statistics']
-            summary_data.append({
-                'category': 'production',
-                'metric': 'peak_production_bbl_per_day',
-                'value': stats.get('peak_production', 'N/A')
-            })
-            summary_data.append({
-                'category': 'production',
-                'metric': 'total_cumulative_bbl',
-                'value': stats.get('total_cumulative', 'N/A')
-            })
-        
-        if summary_data:
-            summary_df = pd.DataFrame(summary_data)
-            csv_path = output_dir / f'summary_{timestamp}.csv'
-            summary_df.to_csv(csv_path, index=False)
-        
-        logger.info(f"Results exported to {output_dir}")
-        
-        return {
-            'json': str(json_path),
-            'pickle': str(pickle_path),
-            'csv': str(csv_path) if summary_data else None
+    def export_results(self, output_dir: str) -> Dict[str, str]:
+    os.makedirs(output_dir, exist_ok=True)
+    
+    output_files = {}
+    
+    csv_path = os.path.join(output_dir, 'simulation_results.csv')
+    time_years = self.time_points / 365.0
+    
+    df = pd.DataFrame({
+        'Time_Days': self.time_points,
+        'Time_Years': time_years,
+        'Oil_Rate_bbl/day': self.oil_production,
+        'Water_Rate_bbl/day': self.water_production,
+        'Gas_Rate_Mscf/day': self.gas_production,
+        'Cumulative_Oil_bbl': self.cumulative_oil,
+        'Reservoir_Pressure_psi': self.reservoir_pressure,
+        'Recovery_Factor': self.recovery_factor,
+        'Cash_Flow_$M': self.cash_flow
+    })
+    
+    df.to_csv(csv_path, index=False)
+    output_files['csv'] = csv_path
+    
+    json_path = os.path.join(output_dir, 'simulation_results.json')
+    
+    json_results = {
+        'parameters': self.params.to_dict(),
+        'wells': self.wells,
+        'forecast': {
+            'time_days': self.time_points.tolist(),
+            'time_years': (self.time_points / 365.0).tolist(),
+            'oil_rate': self.oil_production.tolist(),
+            'water_rate': self.water_production.tolist(),
+            'gas_rate': self.gas_production.tolist(),
+            'cumulative_oil': self.cumulative_oil.tolist(),
+            'recovery_factor': self.recovery_factor.tolist()
+        },
+        'economics': {
+            'cash_flow': self.cash_flow.tolist(),
+            'npv': float(self.npv) if self.npv is not None else None,
+            'irr': float(self.irr) if self.irr is not None else None,
+            'roi': float(self.roi) if self.roi is not None else None,
+            'payback_period': float(self.payback_period) if hasattr(self, 'payback_period') else None
+        },
+        'pressure': {
+            'time_days': self.time_points.tolist(),
+            'pressure': self.reservoir_pressure.tolist(),
+            'initial_pressure': float(self.initial_pressure) if hasattr(self, 'initial_pressure') else None,
+            'abandonment_pressure': float(self.params.abandonment_pressure)
+        },
+        'summary': {
+            'total_oil': float(np.sum(self.oil_production)),
+            'peak_oil_rate': float(np.max(self.oil_production)),
+            'final_recovery_factor': float(self.recovery_factor[-1]) if len(self.recovery_factor) > 0 else 0,
+            'simulation_days': int(len(self.time_points))
         }
+    }
+    
+    with open(json_path, 'w') as f:
+        json.dump(json_results, f, indent=2, default=str)
+    
+    output_files['json'] = json_path
+    
+    plots_path = os.path.join(output_dir, 'plots.png')
+    self.create_visualization(plots_path)
+    output_files['plots'] = plots_path
+    
+    report_path = os.path.join(output_dir, 'simulation_report.txt')
+    with open(report_path, 'w') as f:
+        f.write(self.generate_report())
+    
+    output_files['report'] = report_path
+    
+    print(f"✓ Results exported to: {output_dir}")
+    print(f"  • CSV Data: {csv_path}")
+    print(f"  • JSON Data: {json_path}")
+    print(f"  • Plots: {plots_path}")
+    print(f"  • Report: {report_path}")
+    
+    return output_files
