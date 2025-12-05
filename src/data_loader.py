@@ -1,329 +1,454 @@
 """
-Reservoir Data Loader Module
-
-This module handles loading, validating, and preprocessing reservoir data
-from various sources including Google Drive, local files, and databases.
+Google Drive Data Loader for Reservoir Simulation
 """
 
+import os
+import re
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Optional, Union, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 import logging
 from pathlib import Path
-import warnings
+import tempfile
 
 try:
     import gdown
-    HAS_GDOWN = True
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    from google.auth.transport.requests import Request
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseDownload
+    import io
+    GOOGLE_AVAILABLE = True
 except ImportError:
-    HAS_GDOWN = False
-    warnings.warn("gdown not installed. Google Drive download disabled.")
+    GOOGLE_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class ReservoirDataConfig:
-    """Configuration for reservoir data loading"""
-    production_columns: List[str] = None
-    pressure_columns: List[str] = None
-    injection_columns: List[str] = None
-    petrophysical_columns: List[str] = None
-    time_column: str = "time"
-    date_format: str = "%Y-%m-%d"
-    default_units: Dict = None
+class ReservoirData:
+    """Reservoir data container"""
+    time: np.ndarray
+    production: pd.DataFrame
+    pressure: np.ndarray
+    injection: Optional[pd.DataFrame] = None
+    petrophysical: Optional[pd.DataFrame] = None
+    metadata: Dict[str, Any] = None
     
     def __post_init__(self):
-        if self.default_units is None:
-            self.default_units = {
-                "production": "bbl/day",
-                "pressure": "psi",
-                "injection": "bbl/day",
-                "porosity": "fraction",
-                "permeability": "mD",
-                "thickness": "ft"
-            }
+        if self.metadata is None:
+            self.metadata = {}
+        if self.petrophysical is None:
+            self.petrophysical = pd.DataFrame()
 
 
-class ReservoirDataLoader:
-    """
-    Load and manage reservoir simulation data from multiple sources.
+class GoogleDriveLoader:
+    """Load reservoir data from Google Drive"""
     
-    This class handles:
-    - Data loading from Google Drive links
-    - Data validation and cleaning
-    - Unit conversion
-    - Time series alignment
-    - Missing data handling
-    """
-    
-    def __init__(self, config: Optional[ReservoirDataConfig] = None):
+    def __init__(self, credentials_path: Optional[str] = None):
         """
-        Initialize the data loader.
+        Initialize Google Drive loader
         
         Parameters
         ----------
-        config : ReservoirDataConfig, optional
-            Configuration for data loading
+        credentials_path : str, optional
+            Path to Google API credentials JSON file
         """
-        self.config = config or ReservoirDataConfig()
-        self.data = {}
-        self.metadata = {}
-        logger.info("ReservoirDataLoader initialized")
+        self.credentials_path = credentials_path
+        self.service = None
+        
+        if GOOGLE_AVAILABLE and credentials_path:
+            self._authenticate()
     
-    def load_from_drive(self, drive_links: List[str], 
-                       download_dir: str = "./data/raw") -> Dict:
+    def _authenticate(self):
+        """Authenticate with Google Drive API"""
+        try:
+            SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+            creds = None
+            
+            token_file = Path('token.pickle')
+            
+            if token_file.exists():
+                with open(token_file, 'rb') as token:
+                    creds = pickle.load(token)
+            
+            if not creds or not creds.valid:
+                if creds and creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
+                else:
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        self.credentials_path, SCOPES)
+                    creds = flow.run_local_server(port=0)
+                
+                with open(token_file, 'wb') as token:
+                    pickle.dump(creds, token)
+            
+            self.service = build('drive', 'v3', credentials=creds)
+            logger.info("Google Drive authentication successful")
+            
+        except Exception as e:
+            logger.warning(f"Google Drive authentication failed: {e}")
+            self.service = None
+    
+    def extract_file_id(self, url: str) -> str:
         """
-        Load data from Google Drive links.
+        Extract file ID from Google Drive URL
+        
+        Parameters
+        ----------
+        url : str
+            Google Drive URL
+            
+        Returns
+        -------
+        str
+            File ID
+        """
+        patterns = [
+            r'/file/d/([a-zA-Z0-9_-]+)',
+            r'id=([a-zA-Z0-9_-]+)',
+            r'/d/([a-zA-Z0-9_-]+)'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return match.group(1)
+        
+        return url
+    
+    def download_file(self, file_id: str, output_path: Path) -> bool:
+        """
+        Download file from Google Drive
+        
+        Parameters
+        ----------
+        file_id : str
+            Google Drive file ID
+        output_path : Path
+            Output file path
+            
+        Returns
+        -------
+        bool
+            True if successful
+        """
+        try:
+            # Try using gdown first (simpler)
+            url = f"https://drive.google.com/uc?id={file_id}"
+            gdown.download(url, str(output_path), quiet=False)
+            
+            if output_path.exists() and output_path.stat().st_size > 0:
+                logger.info(f"Downloaded {output_path.name} ({output_path.stat().st_size} bytes)")
+                return True
+            
+        except Exception as e:
+            logger.warning(f"gdown failed: {e}")
+            
+            # Fallback to Google API
+            if self.service:
+                try:
+                    request = self.service.files().get_media(fileId=file_id)
+                    fh = io.FileIO(output_path, 'wb')
+                    downloader = MediaIoBaseDownload(fh, request)
+                    
+                    done = False
+                    while not done:
+                        status, done = downloader.next_chunk()
+                        logger.info(f"Download {int(status.progress() * 100)}%")
+                    
+                    return True
+                    
+                except Exception as api_error:
+                    logger.error(f"Google API download failed: {api_error}")
+        
+        return False
+    
+    def load_from_drive(self, drive_links: List[str]) -> ReservoirData:
+        """
+        Load reservoir data from Google Drive links
         
         Parameters
         ----------
         drive_links : List[str]
-            List of Google Drive file links
-        download_dir : str
-            Directory to download files to
+            List of Google Drive URLs
             
         Returns
         -------
-        Dict
-            Dictionary containing all loaded data
+        ReservoirData
+            Structured reservoir data
         """
-        if not HAS_GDOWN:
-            raise ImportError("gdown required for Google Drive downloads")
-        
         logger.info(f"Loading data from {len(drive_links)} Google Drive links")
         
+        # Create temporary directory for downloads
+        temp_dir = Path(tempfile.mkdtemp())
         downloaded_files = []
+        
+        # Download all files
         for i, link in enumerate(drive_links):
             try:
-                file_id = self._extract_file_id(link)
-                output_path = Path(download_dir) / f"reservoir_data_{i}.csv"
+                file_id = self.extract_file_id(link)
+                output_path = temp_dir / f"reservoir_data_{i+1}.csv"
                 
                 logger.info(f"Downloading file {i+1}: {file_id}")
-                gdown.download(f"https://drive.google.com/uc?id={file_id}", 
-                             str(output_path), quiet=False)
-                downloaded_files.append(output_path)
+                if self.download_file(file_id, output_path):
+                    downloaded_files.append(output_path)
                 
             except Exception as e:
-                logger.error(f"Failed to download {link}: {e}")
-                continue
+                logger.error(f"Error downloading {link}: {e}")
         
-        return self._process_downloaded_files(downloaded_files)
-    
-    def load_from_csv(self, file_paths: Dict[str, str]) -> Dict:
-        """
-        Load data from CSV files.
+        # Process downloaded files
+        data = self._process_files(downloaded_files)
         
-        Parameters
-        ----------
-        file_paths : Dict[str, str]
-            Dictionary mapping data types to file paths
-            
-        Returns
-        -------
-        Dict
-            Dictionary containing loaded data
-        """
-        logger.info("Loading data from CSV files")
-        
-        data = {}
-        for data_type, file_path in file_paths.items():
+        # Cleanup
+        for file_path in downloaded_files:
             try:
-                df = pd.read_csv(file_path)
-                data[data_type] = self._validate_data(df, data_type)
-                logger.info(f"Loaded {data_type}: {df.shape}")
-            except Exception as e:
-                logger.error(f"Failed to load {file_path}: {e}")
+                file_path.unlink()
+            except:
+                pass
         
-        return self._align_data(data)
+        return data
     
-    def load_synthetic_data(self, 
-                           n_wells: int = 8,
-                           n_layers: int = 5,
-                           n_days: int = 1826) -> Dict:
+    def _process_files(self, file_paths: List[Path]) -> ReservoirData:
         """
-        Generate synthetic reservoir data for testing.
+        Process downloaded CSV files
         
         Parameters
         ----------
-        n_wells : int
-            Number of production wells
-        n_layers : int
-            Number of reservoir layers
-        n_days : int
-            Number of days in simulation
+        file_paths : List[Path]
+            List of downloaded file paths
             
         Returns
         -------
-        Dict
-            Synthetic reservoir data
+        ReservoirData
+            Processed reservoir data
         """
-        logger.info(f"Generating synthetic data: {n_wells} wells, {n_layers} layers")
-        
-        np.random.seed(42)
-        time = np.linspace(0, 365*5, n_days)
-        
-        # Generate production data
-        production_data = {}
-        for i in range(n_wells):
-            base_rate = np.random.uniform(1000, 5000)
-            decline_rate = np.random.uniform(0.001, 0.01)
-            
-            rate = base_rate * np.exp(-decline_rate * time)
-            noise = np.random.normal(0, 100, len(time))
-            rate = np.maximum(rate + noise, 0)
-            production_data[f'Well_{i+1}'] = rate
-        
-        # Generate pressure data
-        initial_pressure = 4500
-        pressure_decline = 0.5
-        reservoir_pressure = initial_pressure - pressure_decline * (time / 365)
-        reservoir_pressure += np.random.normal(0, 50, len(time))
-        
-        # Generate injection data
-        injection_data = {}
-        for i in range(3):
-            base_injection = np.random.uniform(2000, 4000)
-            injection = base_injection * (1 + 0.1 * np.sin(2 * np.pi * time / 365))
-            injection_data[f'Inj_{i+1}'] = injection
-        
-        # Generate petrophysical data
-        petrophysical_data = {
-            'Porosity': np.random.uniform(0.15, 0.25, n_layers),
-            'Permeability': np.random.lognormal(2, 0.5, n_layers),
-            'NetThickness': np.random.uniform(10, 50, n_layers),
-            'WaterSaturation': np.random.uniform(0.2, 0.4, n_layers)
+        all_data = {
+            'time': None,
+            'production': None,
+            'pressure': None,
+            'injection': None,
+            'petrophysical': None
         }
-        
-        data = {
-            'time': time,
-            'production': pd.DataFrame(production_data, index=time),
-            'pressure': reservoir_pressure,
-            'injection': pd.DataFrame(injection_data, index=time),
-            'petrophysical': pd.DataFrame(petrophysical_data),
-            'n_wells': n_wells,
-            'n_layers': n_layers,
-            'metadata': {
-                'data_type': 'synthetic',
-                'generation_date': pd.Timestamp.now(),
-                'parameters': {
-                    'n_wells': n_wells,
-                    'n_layers': n_layers,
-                    'n_days': n_days
-                }
-            }
-        }
-        
-        logger.info("Synthetic data generation complete")
-        return data
-    
-    def _extract_file_id(self, drive_link: str) -> str:
-        """Extract file ID from Google Drive link."""
-        # Handle different Google Drive link formats
-        if "/file/d/" in drive_link:
-            start = drive_link.find("/file/d/") + 8
-            end = drive_link.find("/", start)
-            return drive_link[start:end]
-        elif "id=" in drive_link:
-            return drive_link.split("id=")[-1].split("&")[0]
-        else:
-            raise ValueError(f"Invalid Google Drive link format: {drive_link}")
-    
-    def _validate_data(self, df: pd.DataFrame, data_type: str) -> pd.DataFrame:
-        """Validate and clean data based on type."""
-        # Remove duplicates
-        df = df.drop_duplicates()
-        
-        # Handle missing values based on data type
-        if data_type == 'production':
-            # Forward fill for production data
-            df = df.fillna(method='ffill').fillna(0)
-        elif data_type == 'pressure':
-            # Interpolate pressure data
-            df = df.interpolate(method='linear')
-        
-        # Validate numeric columns
-        numeric_cols = df.select_dtypes(include=[np.number]).columns
-        for col in numeric_cols:
-            # Replace negative values with NaN for certain data types
-            if data_type in ['production', 'injection']:
-                df[col] = df[col].clip(lower=0)
-        
-        return df
-    
-    def _align_data(self, data: Dict) -> Dict:
-        """Align all time series data to common time index."""
-        # Find common time index
-        time_series = []
-        for key, df in data.items():
-            if isinstance(df, pd.DataFrame) and 'time' in df.columns:
-                time_series.append(df['time'])
-        
-        if time_series:
-            # Use the longest time series as reference
-            reference_time = max(time_series, key=len)
-            
-            # Align all dataframes to reference time
-            for key, df in data.items():
-                if isinstance(df, pd.DataFrame) and 'time' in df.columns:
-                    data[key] = self._align_to_reference(df, reference_time)
-        
-        return data
-    
-    def _align_to_reference(self, df: pd.DataFrame, reference_time: pd.Series) -> pd.DataFrame:
-        """Align dataframe to reference time series."""
-        aligned = pd.DataFrame(index=reference_time)
-        
-        for col in df.columns:
-            if col != 'time':
-                # Interpolate to align with reference time
-                aligned[col] = np.interp(reference_time, df['time'], df[col])
-        
-        aligned['time'] = reference_time
-        return aligned
-    
-    def _process_downloaded_files(self, file_paths: List[Path]) -> Dict:
-        """Process downloaded files into structured data."""
-        # This is a placeholder - actual implementation depends on file formats
-        data = {}
         
         for file_path in file_paths:
             try:
-                # Attempt to detect file type and load accordingly
-                if file_path.suffix == '.csv':
-                    df = pd.read_csv(file_path)
-                    # Simple detection logic - adjust based on actual data
-                    if 'pressure' in df.columns.str.lower().any():
-                        data['pressure'] = df
-                    elif any('prod' in col.lower() for col in df.columns):
-                        data['production'] = df
-                    elif any('inj' in col.lower() for col in df.columns):
-                        data['injection'] = df
-                elif file_path.suffix in ['.xlsx', '.xls']:
-                    # Handle Excel files
-                    xls = pd.ExcelFile(file_path)
-                    for sheet_name in xls.sheet_names:
-                        df = pd.read_excel(xls, sheet_name)
-                        # Add to data based on sheet name or content
-                        data[sheet_name.lower()] = df
+                # Try to read the file
+                df = self._read_data_file(file_path)
+                
+                # Auto-detect data type
+                data_type = self._detect_data_type(df)
+                
+                if data_type == 'production':
+                    all_data['production'] = self._process_production(df)
+                elif data_type == 'pressure':
+                    all_data['pressure'] = self._process_pressure(df)
+                elif data_type == 'injection':
+                    all_data['injection'] = self._process_injection(df)
+                elif data_type == 'petrophysical':
+                    all_data['petrophysical'] = self._process_petrophysical(df)
+                elif data_type == 'time_series':
+                    ts_data = self._process_time_series(df)
+                    all_data.update(ts_data)
+                    
             except Exception as e:
-                logger.error(f"Failed to process {file_path}: {e}")
+                logger.error(f"Error processing {file_path}: {e}")
         
-        return self._align_data(data)
+        # Create time array if missing
+        if all_data['time'] is None:
+            if all_data['production'] is not None:
+                time_length = len(all_data['production'])
+            elif all_data['pressure'] is not None:
+                time_length = len(all_data['pressure'])
+            else:
+                time_length = 1826  # 5 years default
+            
+            all_data['time'] = np.arange(time_length)
+        
+        # Create ReservoirData object
+        return ReservoirData(
+            time=all_data['time'],
+            production=all_data['production'] or pd.DataFrame(),
+            pressure=all_data['pressure'] or np.array([]),
+            injection=all_data['injection'],
+            petrophysical=all_data['petrophysical'],
+            metadata={
+                'source': 'google_drive',
+                'files_processed': len(file_paths)
+            }
+        )
     
-    def get_data_summary(self) -> pd.DataFrame:
-        """Generate summary statistics for loaded data."""
-        summary_data = []
+    def _read_data_file(self, file_path: Path) -> pd.DataFrame:
+        """Read data file with multiple format support"""
+        try:
+            # Try CSV first
+            df = pd.read_csv(file_path)
+        except:
+            try:
+                # Try Excel
+                df = pd.read_excel(file_path)
+            except:
+                raise ValueError(f"Unsupported file format: {file_path}")
         
-        for key, value in self.data.items():
-            if isinstance(value, pd.DataFrame):
-                summary_data.append({
-                    'dataset': key,
-                    'rows': len(value),
-                    'columns': len(value.columns),
-                    'missing_values': value.isnull().sum().sum(),
-                    'data_types': str(value.dtypes.to_dict())
-                })
+        return df
+    
+    def _detect_data_type(self, df: pd.DataFrame) -> str:
+        """Detect type of reservoir data"""
+        columns_lower = [str(col).lower() for col in df.columns]
         
-        return pd.DataFrame(summary_data)
+        # Check for keywords
+        if any('prod' in col or 'rate' in col or 'qo' in col for col in columns_lower):
+            return 'production'
+        elif any('press' in col or 'psi' in col for col in columns_lower):
+            return 'pressure'
+        elif any('inj' in col or 'wi' in col for col in columns_lower):
+            return 'injection'
+        elif any('poro' in col or 'perm' in col or 'phi' in col for col in columns_lower):
+            return 'petrophysical'
+        elif any('date' in col or 'time' in col or 'day' in col for col in columns_lower):
+            return 'time_series'
+        
+        return 'unknown'
+    
+    def _process_production(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Process production data"""
+        # Find time column
+        time_cols = [col for col in df.columns if 'date' in str(col).lower() or 'time' in str(col).lower()]
+        
+        if time_cols:
+            df_processed = df.set_index(time_cols[0])
+        else:
+            df_processed = df
+        
+        # Convert to numeric
+        df_processed = df_processed.apply(pd.to_numeric, errors='coerce')
+        
+        # Clean data
+        df_processed = df_processed.fillna(method='ffill').fillna(0)
+        df_processed = df_processed.clip(lower=0)
+        
+        return df_processed
+    
+    def _process_pressure(self, df: pd.DataFrame) -> np.ndarray:
+        """Process pressure data"""
+        # Find pressure column
+        press_cols = [col for col in df.columns if 'press' in str(col).lower()]
+        
+        if press_cols:
+            pressure = df[press_cols[0]].values
+        else:
+            # Assume first numeric column
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            pressure = df[numeric_cols[0]].values if len(numeric_cols) > 0 else np.array([])
+        
+        # Clean pressure data
+        pressure = pressure[~np.isnan(pressure)]
+        pressure = pressure[pressure > 0]
+        
+        return pressure
+    
+    def _process_injection(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Process injection data"""
+        return self._process_production(df)
+    
+    def _process_petrophysical(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Process petrophysical data"""
+        # Standardize column names
+        column_mapping = {
+            'porosity': ['poro', 'phi', 'porosity'],
+            'permeability': ['perm', 'k', 'permeability'],
+            'netthickness': ['thick', 'h', 'thickness', 'net'],
+            'watersaturation': ['sw', 'water_sat', 'saturation']
+        }
+        
+        processed_df = pd.DataFrame()
+        
+        for std_name, variations in column_mapping.items():
+            for col in df.columns:
+                col_lower = str(col).lower()
+                if any(var in col_lower for var in variations):
+                    processed_df[std_name] = pd.to_numeric(df[col], errors='coerce')
+                    break
+        
+        # Fill missing values
+        processed_df = processed_df.fillna(processed_df.mean())
+        
+        return processed_df
+    
+    def _process_time_series(self, df: pd.DataFrame) -> Dict:
+        """Process time series data"""
+        result = {}
+        
+        # Extract time
+        time_cols = [col for col in df.columns if 'date' in str(col).lower()]
+        if time_cols:
+            try:
+                time_series = pd.to_datetime(df[time_cols[0]])
+                result['time'] = (time_series - time_series.min()).dt.days.values
+            except:
+                pass
+        
+        # Extract production if present
+        prod_cols = [col for col in df.columns if 'prod' in str(col).lower()]
+        if prod_cols:
+            result['production'] = df[prod_cols].apply(pd.to_numeric, errors='coerce')
+        
+        return result
+
+
+def create_sample_data() -> ReservoirData:
+    """
+    Create sample reservoir data for testing
+    
+    Returns
+    -------
+    ReservoirData
+        Sample reservoir data
+    """
+    np.random.seed(42)
+    
+    # Time data (5 years daily)
+    time = np.arange(0, 5 * 365, 1)
+    
+    # Production data
+    n_wells = 6
+    production_data = {}
+    
+    for i in range(n_wells):
+        base_rate = np.random.uniform(800, 3000)
+        decline = np.random.uniform(0.0005, 0.005)
+        
+        # Exponential decline with noise
+        production = base_rate * np.exp(-decline * time)
+        noise = np.random.normal(0, base_rate * 0.05, len(time))
+        production = np.maximum(production + noise, 0)
+        
+        production_data[f'Well_{i+1}'] = production
+    
+    # Pressure data
+    initial_pressure = 4200
+    pressure_decline = 0.4  # psi/day
+    pressure = initial_pressure - pressure_decline * time / 365
+    pressure += np.random.normal(0, 30, len(time))
+    
+    # Petrophysical data
+    n_layers = 4
+    petrophysical_data = {
+        'porosity': np.random.uniform(0.12, 0.28, n_layers),
+        'permeability': np.random.lognormal(3, 0.8, n_layers),
+        'netthickness': np.random.uniform(15, 45, n_layers),
+        'watersaturation': np.random.uniform(0.18, 0.35, n_layers)
+    }
+    
+    return ReservoirData(
+        time=time,
+        production=pd.DataFrame(production_data, index=time),
+        pressure=pressure,
+        petrophysical=pd.DataFrame(petrophysical_data),
+        metadata={
+            'source': 'sample',
+            'description': 'Synthetic reservoir data for demonstration'
+        }
+    )
