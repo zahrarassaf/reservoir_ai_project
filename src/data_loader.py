@@ -16,42 +16,50 @@ class ReservoirData:
         self.wells = []
         self.metadata = {}
     
-    def load_csv(self, filepath: str):
+    def load_csv(self, filepath: str) -> bool:
         try:
             df = pd.read_csv(filepath)
             
             if df.empty:
+                logger.warning(f"Empty CSV file: {filepath}")
                 return False
             
-            if len(df.columns) >= 2:
-                self.time = np.arange(len(df))
-                
-                numeric_cols = df.select_dtypes(include=[np.number]).columns
-                if len(numeric_cols) >= 1:
-                    prod_col = numeric_cols[0]
-                    self.production = pd.DataFrame({f'Well_{prod_col}': df[prod_col].values})
-                    
-                    if len(numeric_cols) >= 2:
-                        self.pressure = df[numeric_cols[1]].values
-                    else:
-                        self.pressure = np.zeros(len(df))
-                else:
-                    self.production = pd.DataFrame({'Well_1': np.ones(len(df))})
-                    self.pressure = np.zeros(len(df))
-                
-                self.wells = list(self.production.columns)
-                return True
+            if len(df.columns) < 2:
+                logger.warning(f"Insufficient columns in CSV: {filepath}")
+                return False
             
-            return False
+            self.time = np.arange(len(df))
+            
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            
+            if numeric_cols:
+                prod_data = {}
+                for i, col in enumerate(numeric_cols[:3]):
+                    prod_data[f'Well_{i+1}'] = df[col].values
+                self.production = pd.DataFrame(prod_data)
+                
+                if len(numeric_cols) > 3:
+                    self.pressure = df[numeric_cols[3]].values
+                else:
+                    self.pressure = np.full(len(df), 3500.0)
+            else:
+                first_col = df.columns[0]
+                self.production = pd.DataFrame({'Well_1': pd.to_numeric(df[first_col], errors='coerce').fillna(0).values})
+                self.pressure = np.full(len(df), 3500.0)
+            
+            self.wells = list(self.production.columns)
+            logger.info(f"Loaded {len(self.time)} data points from {filepath}")
+            return True
             
         except Exception as e:
             logger.error(f"Error loading CSV {filepath}: {e}")
             return False
     
-    def load_multiple_csv(self, directory: str, pattern: str = "*.csv"):
+    def load_multiple_csv(self, directory: str, pattern: str = "*.csv") -> bool:
         files = glob.glob(os.path.join(directory, pattern))
         
         if not files:
+            logger.warning(f"No CSV files found in {directory}")
             return False
         
         all_dfs = []
@@ -61,8 +69,9 @@ class ReservoirData:
                 df = pd.read_csv(file)
                 if not df.empty:
                     all_dfs.append(df)
-            except:
-                continue
+                    logger.info(f"Loaded {len(df)} rows from {os.path.basename(file)}")
+            except Exception as e:
+                logger.error(f"Error loading {file}: {e}")
         
         if not all_dfs:
             return False
@@ -74,15 +83,16 @@ class ReservoirData:
         
         self.time = np.arange(len(combined_df))
         
-        numeric_cols = combined_df.select_dtypes(include=[np.number]).columns
-        if len(numeric_cols) > 0:
+        numeric_cols = combined_df.select_dtypes(include=[np.number]).columns.tolist()
+        
+        if numeric_cols:
             prod_data = {}
-            for i, col in enumerate(numeric_cols[:3]):
+            for i, col in enumerate(numeric_cols[:min(6, len(numeric_cols))]):
                 prod_data[f'Well_{i+1}'] = combined_df[col].values
             self.production = pd.DataFrame(prod_data)
             
-            if len(numeric_cols) > 3:
-                self.pressure = combined_df[numeric_cols[3]].values
+            if len(numeric_cols) > 6:
+                self.pressure = combined_df[numeric_cols[6]].values
             else:
                 self.pressure = np.random.uniform(3000, 4000, len(combined_df))
         else:
@@ -90,9 +100,10 @@ class ReservoirData:
             self.pressure = np.random.uniform(3000, 4000, len(combined_df))
         
         self.wells = list(self.production.columns)
+        logger.info(f"Loaded {len(self.time)} data points from {len(files)} files")
         return True
     
-    def create_sample_data(self, n_days: int = 1825, n_wells: int = 6):
+    def create_sample_data(self, n_days: int = 1825, n_wells: int = 6) -> bool:
         np.random.seed(42)
         
         self.time = np.arange(n_days)
@@ -116,20 +127,26 @@ class ReservoirData:
         
         self.wells = list(self.production.columns)
         
+        logger.info(f"Created sample data: {n_days} days, {n_wells} wells")
         return True
     
     @property
-    def has_production_data(self):
+    def has_production_data(self) -> bool:
         return not self.production.empty and len(self.production) > 0
     
     @property
-    def has_pressure_data(self):
+    def has_pressure_data(self) -> bool:
         return len(self.pressure) > 0
     
-    def summary(self):
+    def summary(self) -> Dict[str, Any]:
         return {
             'wells': len(self.wells),
             'time_points': len(self.time),
             'production_columns': list(self.production.columns),
-            'pressure_available': self.has_pressure_data
+            'pressure_available': self.has_pressure_data,
+            'production_range': {
+                'min': float(self.production.min().min()) if self.has_production_data else 0,
+                'max': float(self.production.max().max()) if self.has_production_data else 0,
+                'mean': float(self.production.mean().mean()) if self.has_production_data else 0
+            }
         }
