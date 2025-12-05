@@ -1,118 +1,26 @@
 """
-Reservoir Simulation Project - Main Execution File
-PhD-level reservoir simulation with Google Drive integration
+Main entry point for Reservoir Simulation Project
 """
 
-import logging
-from pathlib import Path
 import sys
-from typing import List
+from pathlib import Path
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent / 'src'))
 
-from src.data_loader import GoogleDriveReservoirLoader
-from src.simulator import AdvancedReservoirSimulator
-from src.visualization import ReservoirDashboard
-from src.report_generator import SimulationReport
+from data_loader import GoogleDriveLoader, create_sample_data
+from simulator import ReservoirSimulator, SimulationParameters
+from visualizer import ReservoirVisualizer
+from analyzer import ReservoirAnalyzer
+from utils import setup_logging
 
 
-def setup_logging():
-    """Setup professional logging"""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler('reservoir_simulation.log'),
-            logging.StreamHandler()
-        ]
-    )
-    return logging.getLogger(__name__)
-
-
-def load_google_drive_data(links: List[str]):
-    """Load data from Google Drive"""
-    logger = logging.getLogger(__name__)
-    logger.info("Initializing Google Drive data loader...")
+def run_with_google_drive():
+    """Run simulation with Google Drive data"""
+    print("\n🔗 Google Drive Mode")
+    print("-" * 40)
     
-    # Initialize loader
-    loader = GoogleDriveReservoirLoader(
-        credentials_path='credentials.json',  # You need to provide this
-        download_dir='./data/raw'
-    )
-    
-    # Load data
-    data = loader.load_from_drive(links)
-    
-    logger.info(f"Data loaded: {len(data.get('time', []))} time points, "
-                f"{data.get('n_wells', 0)} wells")
-    return data
-
-
-def run_simulation(data, forecast_years: int = 3):
-    """Run comprehensive reservoir simulation"""
-    logger = logging.getLogger(__name__)
-    logger.info(f"Initializing simulator with {forecast_years}-year forecast...")
-    
-    # Initialize simulator
-    simulator = AdvancedReservoirSimulator(data)
-    
-    # Run simulation
-    results = simulator.run_comprehensive_analysis(
-        forecast_years=forecast_years,
-        include_economics=True,
-        include_sensitivity=True
-    )
-    
-    logger.info("Simulation completed successfully")
-    return results
-
-
-def generate_outputs(data, results):
-    """Generate all outputs and visualizations"""
-    logger = logging.getLogger(__name__)
-    
-    # Create outputs directory
-    output_dir = Path('./outputs')
-    output_dir.mkdir(exist_ok=True)
-    
-    # 1. Generate dashboard
-    logger.info("Generating visualization dashboard...")
-    dashboard = ReservoirDashboard(data, results)
-    dashboard.create_comprehensive_dashboard(
-        save_path=output_dir / 'reservoir_dashboard.png'
-    )
-    
-    # 2. Generate interactive dashboard
-    dashboard.create_interactive_dashboard(
-        save_path=output_dir / 'interactive_dashboard.html'
-    )
-    
-    # 3. Generate report
-    logger.info("Generating comprehensive report...")
-    report = SimulationReport(data, results)
-    report.generate_pdf_report(
-        output_path=output_dir / 'simulation_report.pdf'
-    )
-    
-    # 4. Export results
-    logger.info("Exporting results...")
-    from src.utils import export_results
-    export_results(results, output_dir / 'simulation_results')
-    
-    logger.info(f"All outputs saved to {output_dir}")
-
-
-def main():
-    """Main execution function"""
-    print("=" * 70)
-    print("ADVANCED RESERVOIR SIMULATION - PhD LEVEL")
-    print("=" * 70)
-    
-    # Setup logging
-    logger = setup_logging()
-    
-    # Google Drive links
+    # Your Google Drive links
     DRIVE_LINKS = [
         "https://drive.google.com/file/d/1ZwEswptUcexDn_kqm_q8qRcHYTl1WHq2/view?usp=sharing",
         "https://drive.google.com/file/d/1sxq7sd4GSL-chE362k8wTLA_arehaD5U/view?usp=sharing",
@@ -123,58 +31,154 @@ def main():
     ]
     
     try:
-        # Step 1: Load data
-        logger.info("Step 1/4: Loading data from Google Drive...")
-        data = load_google_drive_data(DRIVE_LINKS)
-        
-        # Step 2: Run simulation
-        logger.info("Step 2/4: Running reservoir simulation...")
-        results = run_simulation(data, forecast_years=3)
-        
-        # Step 3: Generate outputs
-        logger.info("Step 3/4: Generating outputs...")
-        generate_outputs(data, results)
-        
-        # Step 4: Display summary
-        logger.info("Step 4/4: Displaying results summary...")
-        display_summary(results)
-        
-        print("\n" + "=" * 70)
-        print("✅ PROJECT COMPLETED SUCCESSFULLY!")
-        print("=" * 70)
+        # Try to load from Google Drive
+        print("Loading data from Google Drive...")
+        loader = GoogleDriveLoader(credentials_path='credentials.json')
+        data = loader.load_from_drive(DRIVE_LINKS)
         
     except Exception as e:
-        logger.error(f"Error during execution: {e}")
-        raise
+        print(f"Google Drive loading failed: {e}")
+        print("Using sample data instead...")
+        data = create_sample_data()
+    
+    return data
 
 
-def display_summary(results):
-    """Display key results summary"""
-    print("\n📊 SIMULATION RESULTS SUMMARY")
+def run_with_sample_data():
+    """Run simulation with sample data"""
+    print("\n📊 Sample Data Mode")
     print("-" * 40)
     
-    # Economic results
-    if 'economics' in results:
-        econ = results['economics']
-        print(f"💰 Economic Analysis:")
-        print(f"   NPV: ${econ.get('npv', 0)/1e6:.2f}M")
-        print(f"   IRR: {econ.get('irr', 0)*100:.1f}%")
+    print("Creating sample reservoir data...")
+    data = create_sample_data()
+    
+    return data
+
+
+def main():
+    """Main execution function"""
+    print("=" * 60)
+    print("RESERVOIR SIMULATION PROJECT - PhD LEVEL")
+    print("=" * 60)
+    
+    # Setup logging
+    logger = setup_logging('reservoir_simulation.log', 'INFO')
+    
+    # Ask for mode
+    print("\nSelect mode:")
+    print("1. Google Drive (requires credentials.json)")
+    print("2. Sample Data")
+    
+    try:
+        choice = input("\nEnter choice (1 or 2): ").strip()
+    except KeyboardInterrupt:
+        print("\n\nExiting...")
+        return
+    
+    if choice == '1':
+        data = run_with_google_drive()
+    else:
+        data = run_with_sample_data()
+    
+    # Display data summary
+    print(f"\n📦 Data Summary:")
+    print(f"   • Wells: {data.production.shape[1]}")
+    print(f"   • Time Points: {len(data.time)}")
+    print(f"   • Layers: {len(data.petrophysical) if not data.petrophysical.empty else 0}")
+    
+    # Ask for simulation parameters
+    print("\n⚙️ Simulation Parameters:")
+    
+    try:
+        forecast_years = int(input("Forecast years (default: 3): ") or "3")
+        oil_price = float(input("Oil price USD/bbl (default: 75.0): ") or "75.0")
+        operating_cost = float(input("Operating cost USD/bbl (default: 18.0): ") or "18.0")
+        
+    except ValueError:
+        print("Using default values...")
+        forecast_years = 3
+        oil_price = 75.0
+        operating_cost = 18.0
+    
+    # Set parameters
+    params = SimulationParameters(
+        forecast_years=forecast_years,
+        oil_price=oil_price,
+        operating_cost=operating_cost
+    )
+    
+    # Run data analysis
+    print("\n🔬 Running data analysis...")
+    analyzer = ReservoirAnalyzer(data)
+    analysis_results = analyzer.perform_comprehensive_analysis()
+    
+    # Run simulation
+    print("\n⚡ Running reservoir simulation...")
+    simulator = ReservoirSimulator(data, params)
+    results = simulator.run_comprehensive_simulation()
+    
+    # Create visualizations
+    print("\n🎨 Creating visualizations...")
+    visualizer = ReservoirVisualizer(data, results)
+    
+    # Create dashboard
+    visualizer.create_dashboard(save_path='reservoir_dashboard.png')
+    
+    # Create interactive dashboard
+    visualizer.create_interactive_dashboard(
+        save_path='reservoir_interactive.html'
+    )
+    
+    # Export results
+    print("\n💾 Exporting results...")
+    export_files = simulator.export_results('./outputs')
+    
+    # Display results summary
+    print("\n📈 RESULTS SUMMARY")
+    print("-" * 40)
+    
+    # Material balance
+    mb = results.get('material_balance', {})
+    if mb:
+        print(f"Material Balance:")
+        print(f"  • OOIP: {mb.get('ooip_stb', 0):,.0f} STB")
+    
+    # Production forecast
+    prod = results.get('production_forecast', {})
+    if prod and 'statistics' in prod:
+        stats = prod['statistics']
+        print(f"\nProduction Forecast:")
+        print(f"  • Peak: {stats.get('peak_production', 0):,.0f} bbl/day")
+        print(f"  • Cumulative: {stats.get('total_cumulative', 0)/1e6:.1f}M bbl")
+    
+    # Economic analysis
+    econ = results.get('economic_analysis', {})
+    if econ:
+        print(f"\nEconomic Analysis:")
+        print(f"  • NPV: ${econ.get('npv', 0)/1e6:.2f}M")
+        print(f"  • IRR: {econ.get('irr', 0)*100:.1f}%")
         if econ.get('payback_period'):
-            print(f"   Payback: {econ['payback_period']:.1f} years")
+            print(f"  • Payback: {econ['payback_period']:.1f} years")
     
-    # Production results
-    if 'production' in results:
-        prod = results['production']
-        print(f"🛢️ Production Forecast:")
-        print(f"   Peak: {prod.get('peak_rate', 0):,.0f} bbl/day")
-        print(f"   Cumulative: {prod.get('cumulative', 0)/1e6:.1f}M bbl")
+    # Sensitivity analysis
+    sensitivity = results.get('sensitivity_analysis', {})
+    if sensitivity:
+        key_params = sensitivity.get('key_parameters', [])
+        if key_params:
+            print(f"\nSensitivity Analysis:")
+            print(f"  • Key Parameters: {', '.join(key_params[:3])}")
     
-    # Reservoir results
-    if 'reservoir' in results:
-        res = results['reservoir']
-        print(f"🏭 Reservoir Analysis:")
-        print(f"   OOIP: {res.get('ooip', 0)/1e6:.1f}M STB")
-        print(f"   Recovery Factor: {res.get('recovery_factor', 0)*100:.1f}%")
+    print("\n" + "=" * 60)
+    print("✅ SIMULATION COMPLETED SUCCESSFULLY!")
+    print("=" * 60)
+    
+    print("\n📁 Generated Files:")
+    print(f"  • reservoir_dashboard.png")
+    print(f"  • reservoir_interactive.html")
+    if export_files.get('json'):
+        print(f"  • {Path(export_files['json']).name}")
+    if export_files.get('csv'):
+        print(f"  • {Path(export_files['csv']).name}")
 
 
 if __name__ == "__main__":
