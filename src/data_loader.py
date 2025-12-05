@@ -16,92 +16,118 @@ class ReservoirData:
         self.wells = []
         self.metadata = {}
     
-    def load_csv(self, filepath: str) -> bool:
+    def load_txt_file(self, filepath: str) -> bool:
         try:
-            df = pd.read_csv(filepath)
+            print(f"\nLoading text file: {os.path.basename(filepath)}")
             
-            if df.empty:
-                logger.warning(f"Empty CSV file: {filepath}")
-                return False
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
             
-            if len(df.columns) < 2:
-                logger.warning(f"Insufficient columns in CSV: {filepath}")
-                return False
+            print(f"File has {len(lines)} lines")
             
-            self.time = np.arange(len(df))
-            
-            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            
-            if numeric_cols:
-                prod_data = {}
-                for i, col in enumerate(numeric_cols[:3]):
-                    prod_data[f'Well_{i+1}'] = df[col].values
-                self.production = pd.DataFrame(prod_data)
+            data = []
+            for i, line in enumerate(lines):
+                line = line.strip()
+                if not line:
+                    continue
                 
-                if len(numeric_cols) > 3:
-                    self.pressure = df[numeric_cols[3]].values
+                if any(line.startswith(c) for c in ['#', '//', '%', '*']):
+                    continue
+                
+                numbers = []
+                parts = []
+                
+                if '\t' in line:
+                    parts = line.split('\t')
+                elif ',' in line:
+                    parts = line.split(',')
+                elif ';' in line:
+                    parts = line.split(';')
                 else:
-                    self.pressure = np.full(len(df), 3500.0)
+                    parts = line.split()
+                
+                for part in parts:
+                    part = part.strip()
+                    if part:
+                        try:
+                            num = float(part)
+                            numbers.append(num)
+                        except:
+                            try:
+                                num = float(part.replace(',', ''))
+                                numbers.append(num)
+                            except:
+                                continue
+                
+                if numbers:
+                    data.append(numbers)
+            
+            print(f"Extracted {len(data)} data rows")
+            
+            if len(data) < 10:
+                print("Not enough data rows")
+                return False
+            
+            max_cols = max(len(row) for row in data)
+            padded_data = []
+            for row in data:
+                if len(row) < max_cols:
+                    padded_row = list(row) + [0.0] * (max_cols - len(row))
+                    padded_data.append(padded_row)
+                else:
+                    padded_data.append(row)
+            
+            data_array = np.array(padded_data)
+            print(f"Data shape: {data_array.shape}")
+            
+            self.time = np.arange(len(data_array))
+            
+            n_cols = data_array.shape[1]
+            n_wells = min(6, n_cols)
+            
+            production_data = {}
+            for i in range(n_wells):
+                col_data = data_array[:, i]
+                production_data[f'Well_{i+1}'] = col_data
+            
+            self.production = pd.DataFrame(production_data)
+            
+            if n_cols > n_wells:
+                self.pressure = data_array[:, n_wells]
             else:
-                first_col = df.columns[0]
-                self.production = pd.DataFrame({'Well_1': pd.to_numeric(df[first_col], errors='coerce').fillna(0).values})
-                self.pressure = np.full(len(df), 3500.0)
+                self.pressure = 4000 - 0.3 * self.time + np.random.normal(0, 100, len(self.time))
+                self.pressure = np.maximum(800, self.pressure)
             
             self.wells = list(self.production.columns)
-            logger.info(f"Loaded {len(self.time)} data points from {filepath}")
+            
+            print(f"✓ Successfully loaded: {len(self.time)} time points, {len(self.wells)} wells")
             return True
             
         except Exception as e:
-            logger.error(f"Error loading CSV {filepath}: {e}")
+            print(f"✗ Error loading text file: {e}")
+            return False
+    
+    def load_csv(self, filepath: str) -> bool:
+        try:
+            return self.load_txt_file(filepath)
+        except:
             return False
     
     def load_multiple_csv(self, directory: str, pattern: str = "*.csv") -> bool:
         files = glob.glob(os.path.join(directory, pattern))
         
         if not files:
-            logger.warning(f"No CSV files found in {directory}")
             return False
         
-        all_dfs = []
-        
+        all_data = []
         for file in files:
             try:
-                df = pd.read_csv(file)
-                if not df.empty:
-                    all_dfs.append(df)
-                    logger.info(f"Loaded {len(df)} rows from {os.path.basename(file)}")
-            except Exception as e:
-                logger.error(f"Error loading {file}: {e}")
+                if self.load_txt_file(file):
+                    return True
+            except:
+                continue
         
-        if not all_dfs:
-            return False
-        
-        combined_df = pd.concat(all_dfs, ignore_index=True)
-        
-        if combined_df.empty:
-            return False
-        
-        self.time = np.arange(len(combined_df))
-        
-        numeric_cols = combined_df.select_dtypes(include=[np.number]).columns.tolist()
-        
-        if numeric_cols:
-            prod_data = {}
-            for i, col in enumerate(numeric_cols[:min(6, len(numeric_cols))]):
-                prod_data[f'Well_{i+1}'] = combined_df[col].values
-            self.production = pd.DataFrame(prod_data)
-            
-            if len(numeric_cols) > 6:
-                self.pressure = combined_df[numeric_cols[6]].values
-            else:
-                self.pressure = np.random.uniform(3000, 4000, len(combined_df))
-        else:
-            self.production = pd.DataFrame({'Well_1': np.random.uniform(100, 500, len(combined_df))})
-            self.pressure = np.random.uniform(3000, 4000, len(combined_df))
-        
-        self.wells = list(self.production.columns)
-        logger.info(f"Loaded {len(self.time)} data points from {len(files)} files")
-        return True
+        return False
     
     def create_sample_data(self, n_days: int = 1825, n_wells: int = 6) -> bool:
         np.random.seed(42)
@@ -109,25 +135,22 @@ class ReservoirData:
         self.time = np.arange(n_days)
         
         production_data = {}
-        
         for i in range(n_wells):
-            qi = 800 + np.random.uniform(-200, 200)
-            Di = 0.0005 + np.random.uniform(-0.0001, 0.0001)
+            qi = 500 + np.random.uniform(-100, 100)
+            Di = 0.0003 + np.random.uniform(-0.0001, 0.0001)
             rates = qi * np.exp(-Di * self.time)
-            noise = np.random.normal(0, 30, n_days)
-            rates = np.maximum(10, rates + noise)
+            noise = np.random.normal(0, 20, n_days)
+            rates = np.maximum(5, rates + noise)
             production_data[f'Well_{i+1}'] = rates
         
         self.production = pd.DataFrame(production_data)
         
-        initial_pressure = 4000
-        pressure_decline = 0.00005 * self.time
-        noise = np.random.normal(0, 30, n_days)
-        self.pressure = np.maximum(1000, initial_pressure - pressure_decline + noise)
+        self.pressure = 4000 - 0.2 * self.time + np.random.normal(0, 50, n_days)
+        self.pressure = np.maximum(1000, self.pressure)
         
         self.wells = list(self.production.columns)
         
-        logger.info(f"Created sample data: {n_days} days, {n_wells} wells")
+        print(f"Created sample data: {n_days} days, {n_wells} wells")
         return True
     
     @property
@@ -148,5 +171,10 @@ class ReservoirData:
                 'min': float(self.production.min().min()) if self.has_production_data else 0,
                 'max': float(self.production.max().max()) if self.has_production_data else 0,
                 'mean': float(self.production.mean().mean()) if self.has_production_data else 0
+            },
+            'pressure_range': {
+                'min': float(self.pressure.min()) if self.has_pressure_data else 0,
+                'max': float(self.pressure.max()) if self.has_pressure_data else 0,
+                'mean': float(self.pressure.mean()) if self.has_pressure_data else 0
             }
         }
