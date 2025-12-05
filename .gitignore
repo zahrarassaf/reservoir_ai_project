@@ -1,12 +1,3 @@
-# Simulation results
-*.EGRID
-*.INIT
-*.UNRST
-*.SMSPEC
-*.DBG
-*.PRT
-*.LOG
-
 # Python
 __pycache__/
 *.py[cod]
@@ -29,39 +20,46 @@ wheels/
 .installed.cfg
 *.egg
 
+# Virtual Environment
+venv/
+env/
+ENV/
+.env/
+
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 
+# Data files
+*.csv
+*.xlsx
+*.h5
+*.pkl
+*.json
+*.las
+
+# Outputs
+outputs/
+results/
+*.png
+*.pdf
+*.html
+*.log
+
+# Google Drive credentials
+credentials.json
+token.pickle
+
+# Notebooks
+.ipynb_checkpoints/
+
 # OS
 .DS_Store
 Thumbs.db
 
-# Results
-results/simulation_output/*
-!results/simulation_output/.gitkeep
-results/analysis_results/*
-!results/analysis_results/.gitkeep
-results/plots/*
-!results/plots/.gitkeep
-
-# Logs
-*.log
-logs/
-
-# Virtual environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Jupyter
-.ipynb_checkpoints
-
-# PyCharm
-.idea/
+# Secrets
+*.key
+*.pem
+secrets/
