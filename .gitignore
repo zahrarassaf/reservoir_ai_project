@@ -38,7 +38,6 @@ ENV/
 *.h5
 *.pkl
 *.json
-*.las
 
 # Outputs
 outputs/
@@ -52,14 +51,6 @@ results/
 credentials.json
 token.pickle
 
-# Notebooks
-.ipynb_checkpoints/
-
 # OS
 .DS_Store
 Thumbs.db
-
-# Secrets
-*.key
-*.pem
-secrets/
