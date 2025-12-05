@@ -17,6 +17,7 @@ class ReservoirData:
         self.metadata = {}
     
     def load_txt_file(self, filepath: str) -> bool:
+        """Load data from text file"""
         try:
             print(f"\nLoading text file: {os.path.basename(filepath)}")
             
@@ -108,18 +109,19 @@ class ReservoirData:
             return False
     
     def load_csv(self, filepath: str) -> bool:
+        """Try to load CSV or text file"""
         try:
             return self.load_txt_file(filepath)
         except:
             return False
     
     def load_multiple_csv(self, directory: str, pattern: str = "*.csv") -> bool:
+        """Load multiple CSV files from directory"""
         files = glob.glob(os.path.join(directory, pattern))
         
         if not files:
             return False
         
-        all_data = []
         for file in files:
             try:
                 if self.load_txt_file(file):
@@ -130,6 +132,7 @@ class ReservoirData:
         return False
     
     def create_sample_data(self, n_days: int = 1825, n_wells: int = 6) -> bool:
+        """Create sample data for testing"""
         np.random.seed(42)
         
         self.time = np.arange(n_days)
@@ -155,26 +158,39 @@ class ReservoirData:
     
     @property
     def has_production_data(self) -> bool:
+        """Check if production data exists"""
         return not self.production.empty and len(self.production) > 0
     
     @property
     def has_pressure_data(self) -> bool:
+        """Check if pressure data exists"""
         return len(self.pressure) > 0
     
     def summary(self) -> Dict[str, Any]:
-        return {
+        """Get data summary"""
+        summary_dict = {
             'wells': len(self.wells),
             'time_points': len(self.time),
             'production_columns': list(self.production.columns),
-            'pressure_available': self.has_pressure_data,
-            'production_range': {
-                'min': float(self.production.min().min()) if self.has_production_data else 0,
-                'max': float(self.production.max().max()) if self.has_production_data else 0,
-                'mean': float(self.production.mean().mean()) if self.has_production_data else 0
-            },
-            'pressure_range': {
-                'min': float(self.pressure.min()) if self.has_pressure_data else 0,
-                'max': float(self.pressure.max()) if self.has_pressure_data else 0,
-                'mean': float(self.pressure.mean()) if self.has_pressure_data else 0
-            }
+            'pressure_available': self.has_pressure_data
         }
+        
+        if self.has_production_data:
+            summary_dict['production_range'] = {
+                'min': float(self.production.min().min()),
+                'max': float(self.production.max().max()),
+                'mean': float(self.production.mean().mean())
+            }
+        else:
+            summary_dict['production_range'] = {'min': 0, 'max': 0, 'mean': 0}
+        
+        if self.has_pressure_data:
+            summary_dict['pressure_range'] = {
+                'min': float(self.pressure.min()),
+                'max': float(self.pressure.max()),
+                'mean': float(self.pressure.mean())
+            }
+        else:
+            summary_dict['pressure_range'] = {'min': 0, 'max': 0, 'mean': 0}
+        
+        return summary_dict
