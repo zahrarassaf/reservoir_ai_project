@@ -1,0 +1,76 @@
+# Reservoir Simulation Configuration
+
+data_loading:
+  google_drive:
+    enabled: true
+    download_directory: "./data/raw"
+    max_retries: 3
+    timeout_seconds: 30
+  
+  local_files:
+    enabled: false
+    production_file: "data/raw/production.csv"
+    pressure_file: "data/raw/pressure.csv"
+    injection_file: "data/raw/injection.csv"
+    petrophysical_file: "data/raw/petrophysical.csv"
+
+simulation:
+  forecast_years: 2
+  time_step_days: 1
+  decline_model: "exponential"  # exponential, hyperbolic, harmonic
+  material_balance_method: "tank"
+  
+  convergence:
+    tolerance: 1e-6
+    max_iterations: 1000
+  
+  economic:
+    oil_price_usd_per_bbl: 70.0
+    operating_cost_usd_per_bbl: 15.0
+    capital_cost_usd_per_year: 1000000.0
+    discount_rate: 0.10
+    tax_rate: 0.30
+
+visualization:
+  style: "professional"
+  color_palette: "Set2"
+  figure_size: [12, 8]
+  dpi: 300
+  
+  output:
+    format: "png"  # png, pdf, svg
+    directory: "./outputs/plots"
+    interactive_html: true
+
+reporting:
+  format: "pdf"  # pdf, html, markdown
+  output_directory: "./outputs/reports"
+  include_sections:
+    - executive_summary
+    - reservoir_characterization
+    - production_analysis
+    - pressure_analysis
+    - economic_analysis
+    - sensitivity_analysis
+    - recommendations
+  
+  executive_summary:
+    max_length: 500
+    include_key_metrics: true
+
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "logs/reservoir_simulation.log"
+  max_file_size_mb: 10
+  backup_count: 5
+
+performance:
+  parallel_processing: true
+  max_workers: 4
+  chunk_size: 1000
+
+validation:
+  data_quality_threshold: 0.95
+  outlier_detection: true
+  outlier_threshold: 3.0
+  missing_data_strategy: "interpolate"  # interpolate, fill, drop
