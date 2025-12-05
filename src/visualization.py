@@ -1,17 +1,11 @@
 """
-Reservoir Simulation Visualization
-
-This module provides comprehensive visualization capabilities for
-reservoir simulation results including production profiles, pressure
-analysis, economic indicators, and sensitivity studies.
+Reservoir Simulation Visualizer
 """
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Optional, Tuple
-import seaborn as sns
-from matplotlib.gridspec import GridSpec
+from typing import Dict, Optional, List
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import logging
@@ -20,555 +14,405 @@ logger = logging.getLogger(__name__)
 
 
 class ReservoirVisualizer:
-    """
-    Advanced visualization toolkit for reservoir simulation results.
+    """Create visualizations for reservoir simulation results"""
     
-    Features:
-    - Production profile plots
-    - Pressure analysis charts
-    - Economic indicator dashboards
-    - Sensitivity analysis visualizations
-    - Interactive 3D plots
-    - Professional report-ready figures
-    """
-    
-    def __init__(self, data: Dict, results: Dict):
+    def __init__(self, data, results):
         """
-        Initialize visualizer.
+        Initialize visualizer
         
         Parameters
         ----------
-        data : Dict
-            Input reservoir data
+        data : ReservoirData
+            Input data
         results : Dict
             Simulation results
         """
         self.data = data
         self.results = results
-        self.historical_end = len(data.get('time', []))
         
-        # Set professional plotting style
-        self._set_plotting_style()
-        logger.info("ReservoirVisualizer initialized")
+        # Set plotting style
+        plt.style.use('seaborn-v0_8-darkgrid')
+        self.colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', 
+                      '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
     
-    def _set_plotting_style(self):
-        """Set professional plotting style."""
-        plt.rcParams['figure.figsize'] = [12, 8]
-        plt.rcParams['font.size'] = 12
-        plt.rcParams['axes.grid'] = True
-        plt.rcParams['grid.alpha'] = 0.3
-        plt.rcParams['axes.labelsize'] = 14
-        plt.rcParams['axes.titlesize'] = 16
-        plt.rcParams['legend.fontsize'] = 12
-        plt.rcParams['xtick.labelsize'] = 11
-        plt.rcParams['ytick.labelsize'] = 11
-    
-    def create_comprehensive_dashboard(self, save_path: Optional[str] = None):
-        """
-        Create comprehensive visualization dashboard.
+    def create_dashboard(self, save_path: Optional[str] = None):
+        """Create comprehensive dashboard"""
+        fig, axes = plt.subplots(3, 3, figsize=(18, 12))
         
-        Parameters
-        ----------
-        save_path : str, optional
-            Path to save the dashboard figure
-        """
-        logger.info("Creating comprehensive visualization dashboard")
+        # Production forecast
+        self._plot_production_forecast(axes[0, 0])
         
-        fig = plt.figure(figsize=(20, 15))
-        gs = GridSpec(4, 3, figure=fig, hspace=0.3, wspace=0.3)
+        # Pressure profile
+        self._plot_pressure_profile(axes[0, 1])
         
-        # Production Profile
-        ax1 = fig.add_subplot(gs[0, 0])
-        self._plot_production_profile(ax1)
+        # Economic analysis
+        self._plot_economic_analysis(axes[0, 2])
         
-        # Pressure Profile
-        ax2 = fig.add_subplot(gs[0, 1])
-        self._plot_pressure_profile(ax2)
+        # Decline curves
+        self._plot_decline_curves(axes[1, 0])
         
-        # Injection Profile
-        ax3 = fig.add_subplot(gs[0, 2])
-        self._plot_injection_profile(ax3)
+        # Petrophysical properties
+        if not self.data.petrophysical.empty:
+            self._plot_petrophysical(axes[1, 1])
         
-        # Economic Analysis
-        ax4 = fig.add_subplot(gs[1, 0])
-        self._plot_economic_analysis(ax4)
+        # Material balance
+        self._plot_material_balance(axes[1, 2])
         
-        # Decline Curve Analysis
-        ax5 = fig.add_subplot(gs[1, 1])
-        self._plot_decline_analysis(ax5)
+        # Sensitivity analysis
+        self._plot_sensitivity(axes[2, 0])
         
-        # Petrophysical Properties
-        ax6 = fig.add_subplot(gs[1, 2])
-        self._plot_petrophysical_distribution(ax6)
+        # Well production comparison
+        self._plot_well_comparison(axes[2, 1])
         
-        # Correlation Matrix
-        ax7 = fig.add_subplot(gs[2, 0])
-        self._plot_correlation_matrix(ax7)
+        # Recovery factor
+        self._plot_recovery_factor(axes[2, 2])
         
-        # Material Balance
-        ax8 = fig.add_subplot(gs[2, 1])
-        self._plot_material_balance(ax8)
-        
-        # Recovery Factor
-        ax9 = fig.add_subplot(gs[2, 2])
-        self._plot_recovery_factor(ax9)
-        
-        # Sensitivity Analysis
-        ax10 = fig.add_subplot(gs[3, :])
-        self._plot_sensitivity_analysis(ax10)
-        
-        fig.suptitle('Advanced Reservoir Simulation Dashboard', 
-                    fontsize=20, fontweight='bold', y=0.98)
+        plt.suptitle('Reservoir Simulation Dashboard', fontsize=16, fontweight='bold')
+        plt.tight_layout()
         
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             logger.info(f"Dashboard saved to {save_path}")
         
-        plt.tight_layout()
         plt.show()
     
-    def _plot_production_profile(self, ax):
-        """Plot production profile with historical and forecast data."""
-        production = self.results['production']
-        time_years = self.results['time'] / 365
+    def _plot_production_forecast(self, ax):
+        """Plot production forecast"""
+        if 'production_forecast' not in self.results:
+            ax.text(0.5, 0.5, 'No production forecast data', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Production Forecast')
+            return
         
-        total_production = production.sum(axis=1)
+        forecast = self.results['production_forecast']
+        time = np.array(forecast['time'])
+        total_prod = np.array(forecast['total_production'])
         
-        ax.plot(time_years[:self.historical_end], 
-                total_production[:self.historical_end],
-                'b-', linewidth=2, label='Historical', alpha=0.8)
+        # Find historical/forecast boundary
+        hist_end = len(self.data.time) if hasattr(self.data, 'time') else 0
         
-        ax.plot(time_years[self.historical_end:], 
-                total_production[self.historical_end:],
-                'r--', linewidth=2, label='Forecast', alpha=0.8)
+        # Plot
+        time_years = time / 365
+        ax.plot(time_years[:hist_end], total_prod[:hist_end], 
+               'b-', linewidth=2, label='Historical')
+        ax.plot(time_years[hist_end:], total_prod[hist_end:], 
+               'r--', linewidth=2, label='Forecast')
         
-        ax.axvline(x=time_years[self.historical_end], 
-                  color='k', linestyle=':', alpha=0.5, linewidth=1)
+        # Add vertical line at forecast start
+        if hist_end < len(time_years):
+            ax.axvline(x=time_years[hist_end], color='k', 
+                      linestyle=':', alpha=0.5, linewidth=1)
         
         ax.set_xlabel('Time (Years)')
-        ax.set_ylabel('Total Production Rate (bbl/day)')
-        ax.set_title('Production Profile')
-        ax.legend(loc='best')
+        ax.set_ylabel('Production Rate (bbl/day)')
+        ax.set_title('Production Forecast')
+        ax.legend()
         ax.grid(True, alpha=0.3)
-        
-        # Add annotation for peak production
-        peak_idx = np.argmax(total_production)
-        ax.annotate(f'Peak: {total_production[peak_idx]:.0f} bbl/day',
-                   xy=(time_years[peak_idx], total_production[peak_idx]),
-                   xytext=(time_years[peak_idx] + 0.5, total_production[peak_idx] * 0.9),
-                   arrowprops=dict(arrowstyle='->', color='gray'))
     
     def _plot_pressure_profile(self, ax):
-        """Plot reservoir pressure profile."""
-        pressure = self.results['pressure']
-        time_years = self.results['time'] / 365
+        """Plot pressure profile"""
+        if 'pressure_forecast' not in self.results:
+            ax.text(0.5, 0.5, 'No pressure data', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Pressure Profile')
+            return
         
-        ax.plot(time_years[:self.historical_end], 
-                pressure[:self.historical_end],
-                'b-', linewidth=2, label='Historical', alpha=0.8)
+        pressure_data = self.results['pressure_forecast']
+        time = np.array(pressure_data['time'])
+        pressure = np.array(pressure_data['pressure'])
         
-        ax.plot(time_years[self.historical_end:], 
-                pressure[self.historical_end:],
-                'r--', linewidth=2, label='Forecast', alpha=0.8)
+        # Find historical/forecast boundary
+        hist_end = len(self.data.time) if hasattr(self.data, 'time') else 0
         
-        ax.axvline(x=time_years[self.historical_end], 
-                  color='k', linestyle=':', alpha=0.5, linewidth=1)
+        # Plot
+        time_years = time / 365
+        ax.plot(time_years[:hist_end], pressure[:hist_end], 
+               'g-', linewidth=2, label='Historical')
+        ax.plot(time_years[hist_end:], pressure[hist_end:], 
+               'm--', linewidth=2, label='Forecast')
         
         ax.set_xlabel('Time (Years)')
-        ax.set_ylabel('Reservoir Pressure (psi)')
+        ax.set_ylabel('Pressure (psi)')
         ax.set_title('Pressure Profile')
-        ax.legend(loc='best')
+        ax.legend()
         ax.grid(True, alpha=0.3)
-        
-        # Add pressure depletion annotation
-        pressure_depletion = ((pressure[0] - pressure[-1]) / pressure[0]) * 100
-        ax.annotate(f'Depletion: {pressure_depletion:.1f}%',
-                   xy=(0.05, 0.05), xycoords='axes fraction',
-                   fontsize=10, bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-    
-    def _plot_injection_profile(self, ax):
-        """Plot injection profile."""
-        if 'injection' in self.results and self.results['injection'].size > 0:
-            injection = self.results['injection']
-            time_years = self.results['time'] / 365
-            
-            total_injection = injection.sum(axis=1)
-            
-            ax.plot(time_years[:self.historical_end], 
-                    total_injection[:self.historical_end],
-                    'g-', linewidth=2, label='Historical', alpha=0.8)
-            
-            ax.plot(time_years[self.historical_end:], 
-                    total_injection[self.historical_end:],
-                    'm--', linewidth=2, label='Forecast', alpha=0.8)
-            
-            ax.axvline(x=time_years[self.historical_end], 
-                      color='k', linestyle=':', alpha=0.5, linewidth=1)
-            
-            ax.set_xlabel('Time (Years)')
-            ax.set_ylabel('Total Injection Rate (bbl/day)')
-            ax.set_title('Injection Profile')
-            ax.legend(loc='best')
-            ax.grid(True, alpha=0.3)
-        else:
-            ax.text(0.5, 0.5, 'No Injection Data Available', 
-                   ha='center', va='center', transform=ax.transAxes)
-            ax.set_title('Injection Profile')
     
     def _plot_economic_analysis(self, ax):
-        """Plot economic analysis results."""
-        economics = self.results['economics']
-        time_years = self.results['time'] / 365
+        """Plot economic analysis"""
+        if 'economic_analysis' not in self.results:
+            ax.text(0.5, 0.5, 'No economic data', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Economic Analysis')
+            return
         
-        cumulative_cash_flow = np.array(economics['cumulative_cash_flow_usd'])
+        econ = self.results['economic_analysis']
+        cash_flow = np.array(econ['cumulative_cash_flow'])
         
-        ax.plot(time_years, cumulative_cash_flow / 1e6, 
-                'b-', linewidth=2, label='Cumulative Cash Flow')
-        
-        # Add NPV line
-        ax.axhline(y=economics['npv_usd'] / 1e6, 
-                  color='r', linestyle='--', 
-                  label=f'NPV: ${economics["npv_usd"]/1e6:.1f}M')
-        
-        # Add payback period if available
-        if economics['payback_period_years']:
-            ax.axvline(x=economics['payback_period_years'], 
-                      color='g', linestyle=':', 
-                      label=f'Payback: {economics["payback_period_years"]:.1f} years')
-        
-        ax.axhline(y=0, color='k', linestyle='-', alpha=0.3, linewidth=0.5)
+        if 'production_forecast' in self.results:
+            time = np.array(self.results['production_forecast']['time'])
+            time_years = time / 365
+            
+            ax.plot(time_years, cash_flow / 1e6, 'b-', linewidth=2)
+            
+            # Add NPV line
+            npv = econ.get('npv', 0)
+            ax.axhline(y=npv/1e6, color='r', linestyle='--', 
+                      label=f'NPV: ${npv/1e6:.1f}M')
+            
+            # Add payback period
+            payback = econ.get('payback_period')
+            if payback:
+                ax.axvline(x=payback, color='g', linestyle=':', 
+                          label=f'Payback: {payback:.1f} years')
         
         ax.set_xlabel('Time (Years)')
-        ax.set_ylabel('Cash Flow (Million USD)')
+        ax.set_ylabel('Cumulative Cash Flow (Million USD)')
         ax.set_title('Economic Analysis')
-        ax.legend(loc='best', fontsize=9)
+        ax.legend()
         ax.grid(True, alpha=0.3)
     
-    def _plot_decline_analysis(self, ax):
-        """Plot decline curve analysis."""
-        production = self.results['production']
-        time_years = self.results['time'] / 365
+    def _plot_decline_curves(self, ax):
+        """Plot decline curves"""
+        if 'decline_analysis' not in self.results:
+            ax.text(0.5, 0.5, 'No decline analysis data', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title('Decline Curve Analysis')
+            return
         
-        # Select first well for analysis
-        well_idx = 0
-        if production.shape[1] > 0:
-            well_production = production[:, well_idx]
-            
-            # Only positive production rates
-            valid_mask = well_production > 0
-            valid_time = time_years[valid_mask]
-            valid_prod = well_production[valid_mask]
-            
-            if len(valid_time) > 10:
-                ax.semilogy(valid_time, valid_prod, 'bo', 
-                          alpha=0.5, markersize=3, label='Well Production')
-                
-                # Fit exponential decline
-                mask_early = valid_time < valid_time[min(100, len(valid_time)-1)]
-                if np.sum(mask_early) > 5:
-                    log_prod = np.log(valid_prod[mask_early])
-                    coeffs = np.polyfit(valid_time[mask_early], log_prod, 1)
-                    
-                    fit_line = np.exp(coeffs[1]) * np.exp(coeffs[0] * valid_time)
-                    ax.semilogy(valid_time, fit_line, 'r-', linewidth=2, 
-                              label=f'Exponential Fit\nDecline: {-coeffs[0]*365:.3f}/year')
+        decline_data = self.results['decline_analysis']
         
-        ax.set_xlabel('Time (Years)')
-        ax.set_ylabel('Production Rate (bbl/day) - Log Scale')
-        ax.set_title(f'Decline Curve Analysis (Well {well_idx+1})')
-        ax.legend(loc='best', fontsize=9)
+        for i, (well, data) in enumerate(list(decline_data.items())[:4]):  # Plot first 4 wells
+            if 'exponential' in data:
+                exp = data['exponential']
+                ax.semilogy([i], [exp['initial_rate']], 'o', 
+                           color=self.colors[i % len(self.colors)], 
+                           label=f'{well}: D={exp["decline_rate"]:.3f}/yr')
+        
+        ax.set_xlabel('Well')
+        ax.set_ylabel('Initial Rate (bbl/day) - Log Scale')
+        ax.set_title('Decline Curve Analysis')
+        ax.legend()
         ax.grid(True, alpha=0.3, which='both')
     
-    def _plot_petrophysical_distribution(self, ax):
-        """Plot petrophysical property distribution."""
-        if 'petrophysical' in self.data:
-            petrophysical = self.data['petrophysical']
-            
-            x = range(len(petrophysical))
-            width = 0.2
-            
-            colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
-            
-            ax.bar([i - width*1.5 for i in x], 
-                   petrophysical['Porosity'], 
-                   width, label='Porosity', alpha=0.8, color=colors[0])
-            
-            ax.bar([i - width/2 for i in x], 
-                   petrophysical['Permeability'] / 100, 
-                   width, label='Permeability/100', alpha=0.8, color=colors[1])
-            
-            ax.bar([i + width/2 for i in x], 
-                   petrophysical['NetThickness'], 
-                   width, label='Net Thickness', alpha=0.8, color=colors[2])
-            
-            ax.bar([i + width*1.5 for i in x], 
-                   petrophysical['WaterSaturation'], 
-                   width, label='Water Saturation', alpha=0.8, color=colors[3])
-            
-            ax.set_xlabel('Layer')
-            ax.set_ylabel('Property Value')
-            ax.set_title('Petrophysical Properties by Layer')
-            ax.legend(loc='best', fontsize=9)
-            ax.grid(True, alpha=0.3)
-        else:
-            ax.text(0.5, 0.5, 'No Petrophysical Data Available', 
+    def _plot_petrophysical(self, ax):
+        """Plot petrophysical properties"""
+        if self.data.petrophysical.empty:
+            ax.text(0.5, 0.5, 'No petrophysical data', 
                    ha='center', va='center', transform=ax.transAxes)
             ax.set_title('Petrophysical Properties')
-    
-    def _plot_correlation_matrix(self, ax):
-        """Plot correlation matrix."""
-        if 'petrophysical' in self.data:
-            petrophysical = self.data['petrophysical']
-            corr_matrix = petrophysical.corr()
-            
-            im = ax.imshow(corr_matrix, cmap='RdBu_r', vmin=-1, vmax=1)
-            
-            ax.set_xticks(range(len(corr_matrix.columns)))
-            ax.set_yticks(range(len(corr_matrix.columns)))
-            ax.set_xticklabels(corr_matrix.columns, rotation=45, ha='right')
-            ax.set_yticklabels(corr_matrix.columns)
-            
-            # Add correlation values
-            for i in range(len(corr_matrix.columns)):
-                for j in range(len(corr_matrix.columns)):
-                    text_color = 'white' if abs(corr_matrix.iloc[i, j]) > 0.5 else 'black'
-                    ax.text(j, i, f'{corr_matrix.iloc[i, j]:.2f}',
-                           ha='center', va='center', 
-                           color=text_color, fontsize=9)
-            
-            ax.set_title('Petrophysical Parameter Correlations')
-            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        else:
-            ax.text(0.5, 0.5, 'No Data for Correlation Matrix', 
-                   ha='center', va='center', transform=ax.transAxes)
-            ax.set_title('Correlation Matrix')
+            return
+        
+        petro = self.data.petrophysical
+        x = range(len(petro))
+        width = 0.2
+        
+        properties = ['porosity', 'permeability', 'netthickness', 'watersaturation']
+        colors = self.colors[:4]
+        
+        for i, (prop, color) in enumerate(zip(properties, colors)):
+            if prop in petro.columns:
+                positions = [pos - width*(1.5 - i) for pos in x]
+                ax.bar(positions, petro[prop], width, 
+                      label=prop.capitalize(), color=color, alpha=0.7)
+        
+        ax.set_xlabel('Layer')
+        ax.set_ylabel('Property Value')
+        ax.set_title('Petrophysical Properties by Layer')
+        ax.legend()
+        ax.grid(True, alpha=0.3, axis='y')
     
     def _plot_material_balance(self, ax):
-        """Plot material balance analysis."""
-        if 'pressure' in self.data and 'production' in self.data:
-            production_total = self.data['production'].sum(axis=1).values
-            pressure = self.data['pressure']
-            
-            # Calculate cumulative production
-            time = self.data['time']
-            cumulative_prod = np.zeros(len(time))
-            
-            for i in range(1, len(time)):
-                dt = time[i] - time[i-1]
-                cumulative_prod[i] = cumulative_prod[i-1] + production_total[i] * dt
-            
-            ax.plot(cumulative_prod / 1e6, pressure, 
-                    'b-o', markersize=3, linewidth=1, label='Production')
-            
-            # Add injection if available
-            if 'injection' in self.data:
-                injection_total = self.data['injection'].sum(axis=1).values
-                cumulative_inj = np.zeros(len(time))
-                
-                for i in range(1, len(time)):
-                    dt = time[i] - time[i-1]
-                    cumulative_inj[i] = cumulative_inj[i-1] + injection_total[i] * dt
-                
-                ax.plot(cumulative_inj / 1e6, pressure, 
-                        'g-s', markersize=3, linewidth=1, label='Injection')
-            
-            ax.set_xlabel('Cumulative Volume (Million bbl)')
-            ax.set_ylabel('Pressure (psi)')
-            ax.set_title('Material Balance Analysis')
-            ax.legend(loc='best', fontsize=9)
-            ax.grid(True, alpha=0.3)
-        else:
-            ax.text(0.5, 0.5, 'Insufficient Data for Material Balance', 
+        """Plot material balance"""
+        if 'material_balance' not in self.results:
+            ax.text(0.5, 0.5, 'No material balance data', 
                    ha='center', va='center', transform=ax.transAxes)
-            ax.set_title('Material Balance Analysis')
+            ax.set_title('Material Balance')
+            return
+        
+        mb = self.results['material_balance']
+        
+        if 'regression' in mb:
+            reg = mb['regression']
+            ax.text(0.5, 0.5, 
+                   f'OOIP: {mb.get("ooip_stb", 0):,.0f} STB\n'
+                   f'R²: {reg.get("r_squared", 0):.3f}',
+                   ha='center', va='center', transform=ax.transAxes,
+                   fontsize=12, bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        ax.set_title('Material Balance Analysis')
+        ax.axis('off')
     
-    def _plot_recovery_factor(self, ax):
-        """Plot recovery factor over time."""
-        recovery = self.results['recovery']
-        time_years = self.results['time'] / 365
-        
-        recovery_factor = recovery['recovery_factor_percent']
-        
-        ax.plot(time_years, recovery_factor, 
-                'b-', linewidth=2, label='Recovery Factor')
-        
-        ax.axvline(x=time_years[self.historical_end], 
-                  color='k', linestyle=':', alpha=0.5, linewidth=1)
-        
-        # Add final recovery factor annotation
-        final_rf = recovery_factor[-1]
-        ax.annotate(f'Final RF: {final_rf:.1f}%', 
-                   xy=(0.05, 0.95), xycoords='axes fraction',
-                   fontsize=10, verticalalignment='top',
-                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-        
-        ax.set_xlabel('Time (Years)')
-        ax.set_ylabel('Recovery Factor (%)')
-        ax.set_title('Recovery Factor Profile')
-        ax.legend(loc='best', fontsize=9)
-        ax.grid(True, alpha=0.3)
-    
-    def _plot_sensitivity_analysis(self, ax):
-        """Plot sensitivity analysis results."""
-        sensitivity = self.results['sensitivity']
-        
-        if sensitivity:
-            n_params = len(sensitivity)
-            bar_width = 0.2
-            index = np.arange(n_params)
-            
-            colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
-            
-            for i, (param_name, param_data) in enumerate(sensitivity.items()):
-                npv_values = param_data['npv_usd']
-                positions = index[i] + np.arange(len(npv_values)) * bar_width
-                
-                bars = ax.bar(positions, npv_values, bar_width,
-                            label=param_name.replace('_', ' ').title(),
-                            alpha=0.7, color=colors[i % len(colors)])
-                
-                # Add value labels on bars
-                for bar in bars:
-                    height = bar.get_height()
-                    ax.annotate(f'${height/1e6:.1f}M',
-                              xy=(bar.get_x() + bar.get_width() / 2, height),
-                              xytext=(0, 3), textcoords="offset points",
-                              ha='center', va='bottom', fontsize=8)
-            
-            ax.set_xlabel('Parameters')
-            ax.set_ylabel('NPV (USD)')
-            ax.set_title('Sensitivity Analysis - NPV Impact')
-            ax.set_xticks(index + bar_width * (len(sensitivity) - 1) / 2)
-            ax.set_xticklabels([name.replace('_', ' ').title() 
-                              for name in sensitivity.keys()], rotation=45)
-            ax.legend(loc='best', fontsize=9)
-            ax.grid(True, alpha=0.3, axis='y')
-        else:
-            ax.text(0.5, 0.5, 'No Sensitivity Analysis Available', 
+    def _plot_sensitivity(self, ax):
+        """Plot sensitivity analysis"""
+        if 'sensitivity_analysis' not in self.results:
+            ax.text(0.5, 0.5, 'No sensitivity data', 
                    ha='center', va='center', transform=ax.transAxes)
             ax.set_title('Sensitivity Analysis')
+            return
+        
+        sensitivity = self.results['sensitivity_analysis']
+        
+        # Get parameters (exclude 'key_parameters')
+        params = [p for p in sensitivity.keys() if p != 'key_parameters']
+        
+        if len(params) > 0:
+            param_names = params[:4]  # Show first 4 parameters
+            base_npv = sensitivity[param_names[0]]['tornado_data']['base'] / 1e6
+            
+            low_vals = []
+            high_vals = []
+            
+            for param in param_names:
+                data = sensitivity[param]['tornado_data']
+                low_vals.append(data['low'] / 1e6 - base_npv)
+                high_vals.append(data['high'] / 1e6 - base_npv)
+            
+            y_pos = np.arange(len(param_names))
+            
+            ax.barh(y_pos, low_vals, height=0.4, color='red', alpha=0.6, label='Low')
+            ax.barh(y_pos, high_vals, height=0.4, color='green', alpha=0.6, label='High')
+            
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels([p.replace('_', ' ').title() for p in param_names])
+            ax.set_xlabel('NPV Change (Million USD)')
+            ax.set_title('Sensitivity Analysis')
+            ax.legend()
+            ax.grid(True, alpha=0.3, axis='x')
+    
+    def _plot_well_comparison(self, ax):
+        """Plot well production comparison"""
+        if not self.data.production.empty:
+            # Plot first 4 wells
+            wells_to_plot = self.data.production.columns[:4]
+            
+            for i, well in enumerate(wells_to_plot):
+                production = self.data.production[well].values[:365]  # First year
+                ax.plot(np.arange(len(production)), production, 
+                       color=self.colors[i % len(self.colors)], 
+                       label=well, alpha=0.7)
+            
+            ax.set_xlabel('Days')
+            ax.set_ylabel('Production Rate (bbl/day)')
+            ax.set_title('Well Production Comparison')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+    
+    def _plot_recovery_factor(self, ax):
+        """Plot recovery factor"""
+        if ('production_forecast' in self.results and 
+            'material_balance' in self.results):
+            
+            prod = self.results['production_forecast']
+            mb = self.results['material_balance']
+            
+            cumulative_prod = np.array(prod['cumulative_production'])
+            ooip = mb.get('ooip_stb', 1)
+            
+            if ooip > 0:
+                recovery_factor = cumulative_prod / ooip * 100
+                time_years = np.array(prod['time']) / 365
+                
+                ax.plot(time_years, recovery_factor, 'b-', linewidth=2)
+                
+                final_rf = recovery_factor[-1]
+                ax.annotate(f'Final RF: {final_rf:.1f}%',
+                           xy=(0.05, 0.95), xycoords='axes fraction',
+                           fontsize=10, verticalalignment='top',
+                           bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+                
+                ax.set_xlabel('Time (Years)')
+                ax.set_ylabel('Recovery Factor (%)')
+                ax.set_title('Recovery Factor Profile')
+                ax.grid(True, alpha=0.3)
+                return
+        
+        ax.text(0.5, 0.5, 'No recovery factor data', 
+               ha='center', va='center', transform=ax.transAxes)
+        ax.set_title('Recovery Factor')
     
     def create_interactive_dashboard(self, save_path: Optional[str] = None):
-        """
-        Create interactive dashboard using Plotly.
+        """Create interactive Plotly dashboard"""
+        if 'production_forecast' not in self.results:
+            logger.warning("No forecast data for interactive dashboard")
+            return
         
-        Parameters
-        ----------
-        save_path : str, optional
-            Path to save the interactive HTML dashboard
-        """
-        logger.info("Creating interactive dashboard")
-        
+        # Create subplots
         fig = make_subplots(
-            rows=3, cols=3,
-            subplot_titles=('Production Profile', 'Pressure Profile', 'Injection Profile',
-                          'Economic Analysis', 'Decline Analysis', 'Recovery Factor',
-                          'Sensitivity Analysis', 'Material Balance', 'Correlation Matrix'),
-            vertical_spacing=0.12,
-            horizontal_spacing=0.1,
-            specs=[[{'type': 'xy'}, {'type': 'xy'}, {'type': 'xy'}],
-                   [{'type': 'xy'}, {'type': 'xy'}, {'type': 'xy'}],
-                   [{'type': 'xy', 'colspan': 2}, None, {'type': 'heatmap'}]]
+            rows=2, cols=3,
+            subplot_titles=('Production Forecast', 'Pressure Profile', 
+                          'Economic Analysis', 'Decline Curves', 
+                          'Recovery Factor', 'Sensitivity Analysis'),
+            vertical_spacing=0.15,
+            horizontal_spacing=0.1
         )
         
-        # Add traces for each subplot
-        self._add_interactive_traces(fig)
+        # Production forecast
+        forecast = self.results['production_forecast']
+        time = np.array(forecast['time'])
+        total_prod = np.array(forecast['total_production'])
+        hist_end = len(self.data.time)
+        
+        time_years = time / 365
+        
+        fig.add_trace(
+            go.Scatter(x=time_years[:hist_end], y=total_prod[:hist_end],
+                      mode='lines', name='Historical',
+                      line=dict(color='blue', width=2)),
+            row=1, col=1
+        )
+        
+        fig.add_trace(
+            go.Scatter(x=time_years[hist_end:], y=total_prod[hist_end:],
+                      mode='lines', name='Forecast',
+                      line=dict(color='red', width=2, dash='dash')),
+            row=1, col=1
+        )
+        
+        # Pressure profile
+        if 'pressure_forecast' in self.results:
+            pressure_data = self.results['pressure_forecast']
+            pressure = np.array(pressure_data['pressure'])
+            
+            fig.add_trace(
+                go.Scatter(x=time_years, y=pressure,
+                          mode='lines', name='Pressure',
+                          line=dict(color='green', width=2)),
+                row=1, col=2
+            )
+        
+        # Economic analysis
+        if 'economic_analysis' in self.results:
+            econ = self.results['economic_analysis']
+            cash_flow = np.array(econ['cumulative_cash_flow'])
+            
+            fig.add_trace(
+                go.Scatter(x=time_years, y=cash_flow / 1e6,
+                          mode='lines', name='Cash Flow',
+                          line=dict(color='purple', width=2)),
+                row=1, col=3
+            )
         
         # Update layout
         fig.update_layout(
-            title_text='Interactive Reservoir Simulation Dashboard',
-            title_font_size=24,
-            height=1200,
+            title_text='Reservoir Simulation Dashboard',
+            title_font_size=20,
             showlegend=True,
+            height=800,
             template='plotly_white'
         )
+        
+        # Update axes labels
+        fig.update_xaxes(title_text='Time (Years)', row=1, col=1)
+        fig.update_yaxes(title_text='Production (bbl/day)', row=1, col=1)
+        
+        fig.update_xaxes(title_text='Time (Years)', row=1, col=2)
+        fig.update_yaxes(title_text='Pressure (psi)', row=1, col=2)
+        
+        fig.update_xaxes(title_text='Time (Years)', row=1, col=3)
+        fig.update_yaxes(title_text='Cash Flow (Million USD)', row=1, col=3)
         
         if save_path:
             fig.write_html(save_path)
             logger.info(f"Interactive dashboard saved to {save_path}")
         
         fig.show()
-    
-    def _add_interactive_traces(self, fig):
-        """Add interactive traces to Plotly figure."""
-        time_years = self.results['time'] / 365
-        
-        # Production Profile (1,1)
-        production = self.results['production'].sum(axis=1)
-        fig.add_trace(
-            go.Scatter(x=time_years[:self.historical_end], 
-                      y=production[:self.historical_end],
-                      mode='lines', name='Historical Production',
-                      line=dict(color='blue', width=2)),
-            row=1, col=1
-        )
-        fig.add_trace(
-            go.Scatter(x=time_years[self.historical_end:], 
-                      y=production[self.historical_end:],
-                      mode='lines', name='Forecast Production',
-                      line=dict(color='red', width=2, dash='dash')),
-            row=1, col=1
-        )
-        
-        # Pressure Profile (1,2)
-        pressure = self.results['pressure']
-        fig.add_trace(
-            go.Scatter(x=time_years[:self.historical_end], 
-                      y=pressure[:self.historical_end],
-                      mode='lines', name='Historical Pressure',
-                      line=dict(color='green', width=2)),
-            row=1, col=2
-        )
-        fig.add_trace(
-            go.Scatter(x=time_years[self.historical_end:], 
-                      y=pressure[self.historical_end:],
-                      mode='lines', name='Forecast Pressure',
-                      line=dict(color='orange', width=2, dash='dash')),
-            row=1, col=2
-        )
-        
-        # Update axes labels
-        fig.update_xaxes(title_text='Time (Years)', row=1, col=1)
-        fig.update_yaxes(title_text='Production Rate (bbl/day)', row=1, col=1)
-        fig.update_xaxes(title_text='Time (Years)', row=1, col=2)
-        fig.update_yaxes(title_text='Pressure (psi)', row=1, col=2)
-        
-        # Add more traces for other subplots...
-        # This is a simplified version - implement full version as needed
-    
-    def export_individual_plots(self, output_dir: str = './outputs/plots/'):
-        """
-        Export individual plots as separate files.
-        
-        Parameters
-        ----------
-        output_dir : str
-            Directory to save plot files
-        """
-        import os
-        os.makedirs(output_dir, exist_ok=True)
-        
-        logger.info(f"Exporting individual plots to {output_dir}")
-        
-        # Production profile
-        fig, ax = plt.subplots(figsize=(10, 6))
-        self._plot_production_profile(ax)
-        plt.savefig(os.path.join(output_dir, 'production_profile.png'), 
-                   dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        # Pressure profile
-        fig, ax = plt.subplots(figsize=(10, 6))
-        self._plot_pressure_profile(ax)
-        plt.savefig(os.path.join(output_dir, 'pressure_profile.png'), 
-                   dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        # Economic analysis
-        fig, ax = plt.subplots(figsize=(10, 6))
-        self._plot_economic_analysis(ax)
-        plt.savefig(os.path.join(output_dir, 'economic_analysis.png'), 
-                   dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        logger.info("Individual plots exported successfully")
