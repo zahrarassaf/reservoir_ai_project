@@ -61,7 +61,8 @@ def load_google_drive_data() -> ReservoirData:
             if not file_path:
                 continue
             
-            if data.load_txt_file(file_path):
+           
+         if data.load_csv(file_path):
                 success = True
                 print(f"\n✅ SUCCESS: Loaded data from {file_id}")
                 break
