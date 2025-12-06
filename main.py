@@ -49,11 +49,8 @@ class DataLoader:
     def load_spe9_file(file_path: str) -> Optional[ReservoirData]:
         """Load and parse SPE9 data file."""
         try:
-            with open(file_path, 'r') as f:
-                content = f.read()
-            
             data = ReservoirData()
-            if data.parse_spe9_data(content):
+            if data.load_spe9_file(file_path):
                 return data
             else:
                 logger.error(f"Failed to parse SPE9 data from {file_path}")
@@ -61,6 +58,8 @@ class DataLoader:
                 
         except Exception as e:
             logger.error(f"Error loading {file_path}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     @staticmethod
@@ -130,8 +129,9 @@ def run_simulation_for_dataset(data: ReservoirData,
     print(f"  • Production data: {'Available' if summary['has_production_data'] else 'Not available'}")
     
     if summary['has_production_data']:
-        print(f"  • Max rate: {summary['max_production_rate']:.1f} bbl/day")
-        print(f"  • Total production: {summary['total_production']:,.0f} bbl")
+        prod_range = summary.get('production_range', {})
+        print(f"  • Max rate: {prod_range.get('max', 0):.1f} STB/day")
+        print(f"  • Total production: {summary.get('total_production', 0):,.0f} bbl")
     
     # Run simulation
     simulator = ReservoirSimulator(data, params)
@@ -144,7 +144,8 @@ def run_simulation_for_dataset(data: ReservoirData,
         print(f"  • NPV: ${econ.get('npv', 0)/1e6:.2f}M")
         print(f"  • IRR: {econ.get('irr', 0)*100:.1f}%")
         print(f"  • ROI: {econ.get('roi', 0)*100:.1f}%")
-        print(f"  • Payback: {econ.get('payback_period_years', 0):.1f} years")
+        if 'payback_period_years' in econ:
+            print(f"  • Payback: {econ.get('payback_period_years', 0):.1f} years")
     
     return results
 
@@ -158,7 +159,11 @@ def main():
     print("1. Google Drive (6 SPE9 datasets)")
     print("2. Sample data (for testing)")
     
-    choice = input("\nEnter choice (1 or 2): ").strip()
+    try:
+        choice = input("\nEnter choice (1 or 2): ").strip()
+    except KeyboardInterrupt:
+        print("\n\nOperation cancelled by user.")
+        return
     
     if choice == '1':
         print("\n" + "="*60)
