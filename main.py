@@ -1,82 +1,92 @@
 """
-Reservoir Simulation Project - Main Entry Point
+Main entry point for Reservoir Simulation Project
 """
 
 import sys
 import os
 import numpy as np
-import pandas as pd
 from typing import Dict, List, Optional
 import tempfile
+import logging
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.data_loader import ReservoirData
 from src.simulator import ReservoirSimulator, SimulationParameters
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-def download_from_drive(file_id: str, output_dir: str) -> Optional[str]:
-    try:
-        import gdown
-        url = f'https://drive.google.com/uc?id={file_id}&export=download'
-        output_path = os.path.join(output_dir, f'{file_id}.txt')
-        
-        print(f"Downloading {file_id}...")
-        gdown.download(url, output_path, quiet=False)
-        
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            print(f"✓ Downloaded: {os.path.getsize(output_path)} bytes")
-            return output_path
-        else:
-            print(f"✗ Download failed")
-            return None
-            
-    except Exception as e:
-        print(f"Download error: {e}")
-        return None
-
-
-def load_google_drive_data() -> ReservoirData:
-    file_ids = [
-        '13twFcFA35CKbI8neIzIt-D54dzDd1B-N',
-        '1n_auKzsDz5aHglQ4YvskjfHPK8ZuLBqC',
-        '1bdyUFKx-FKPy7YOlq-E9Y4nupcrhOoXi',
-        '1f0aJFS99ZBVkT8IXbKdZdVihbIZIpBwZ',
-        '1sxq7sd4GSL-chE362k8wTLA_arehaD5U',
-        '1ZwEswptUcexDn_kqm_q8qRcHYTl1WHq2'
-    ]
+class DataLoader:
+    """Handle data loading from various sources."""
     
-    data = ReservoirData()
-    success = False
-    
-    print("\n" + "="*50)
-    print("GOOGLE DRIVE DATA LOADING")
-    print("="*50)
-    
-    with tempfile.TemporaryDirectory() as temp_dir:
-        for file_id in file_ids:
-            print(f"\nTrying file ID: {file_id}")
+    @staticmethod
+    def download_from_drive(file_id: str, output_dir: str) -> Optional[str]:
+        """Download file from Google Drive."""
+        try:
+            import gdown
+            url = f'https://drive.google.com/uc?id={file_id}&export=download'
+            output_path = os.path.join(output_dir, f'{file_id}.txt')
             
-            file_path = download_from_drive(file_id, temp_dir)
-            if not file_path:
-                continue
+            logger.info(f"Downloading {file_id}...")
+            gdown.download(url, output_path, quiet=False)
             
-            if data.load_csv(file_path):
-                success = True
-                print(f"\n✅ SUCCESS: Loaded data from {file_id}")
-                break
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                logger.info(f"Downloaded: {os.path.getsize(output_path)} bytes")
+                return output_path
             else:
-                print(f"❌ FAILED: Could not parse {file_id}")
+                logger.error(f"Download failed for {file_id}")
+                return None
+                
+        except ImportError:
+            logger.error("gdown library not installed. Install with: pip install gdown")
+            return None
+        except Exception as e:
+            logger.error(f"Download error: {e}")
+            return None
     
-    if not success:
-        print("\n⚠️  WARNING: Could not load any Google Drive files")
-        print("Creating sample data instead...")
-        data.create_sample_data()
+    @staticmethod
+    def load_spe9_file(file_path: str) -> Optional[ReservoirData]:
+        """Load and parse SPE9 data file."""
+        try:
+            with open(file_path, 'r') as f:
+                content = f.read()
+            
+            data = ReservoirData()
+            if data.parse_spe9_data(content):
+                return data
+            else:
+                logger.error(f"Failed to parse SPE9 data from {file_path}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error loading {file_path}: {e}")
+            return None
     
-    return data
-
+    @staticmethod
+    def load_multiple_files(file_ids: List[str]) -> Dict[str, ReservoirData]:
+        """Load multiple data files."""
+        datasets = {}
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            for file_id in file_ids:
+                logger.info(f"Processing file ID: {file_id}")
+                
+                file_path = DataLoader.download_from_drive(file_id, temp_dir)
+                if not file_path:
+                    continue
+                
+                data = DataLoader.load_spe9_file(file_path)
+                if data:
+                    datasets[file_id] = data
+                    logger.info(f"Successfully loaded {file_id}")
+                else:
+                    logger.warning(f"Failed to load {file_id}")
+        
+        return datasets
 
 def get_simulation_parameters() -> SimulationParameters:
+    """Get simulation parameters from user input."""
     print("\n" + "="*50)
     print("SIMULATION PARAMETERS")
     print("="*50)
@@ -91,10 +101,8 @@ def get_simulation_parameters() -> SimulationParameters:
         cost_input = input("Operating cost USD/bbl (default: 18.0): ").strip()
         operating_cost = float(cost_input) if cost_input else 18.0
         
-        print(f"\n✓ Parameters set:")
-        print(f"  - Forecast years: {forecast_years}")
-        print(f"  - Oil price: ${oil_price}/bbl")
-        print(f"  - Operating cost: ${operating_cost}/bbl")
+        logger.info(f"Parameters set: Forecast={forecast_years} years, "
+                   f"Oil price=${oil_price}/bbl, Opex=${operating_cost}/bbl")
         
         return SimulationParameters(
             forecast_years=forecast_years,
@@ -102,93 +110,124 @@ def get_simulation_parameters() -> SimulationParameters:
             operating_cost=operating_cost
         )
         
-    except ValueError:
-        print("\n⚠️  Invalid input. Using default values.")
+    except ValueError as e:
+        logger.error(f"Invalid input: {e}. Using default values.")
         return SimulationParameters()
 
+def run_simulation_for_dataset(data: ReservoirData, 
+                              params: SimulationParameters,
+                              dataset_name: str) -> Dict:
+    """Run simulation for a single dataset."""
+    print(f"\n{'='*60}")
+    print(f"SIMULATING: {dataset_name}")
+    print(f"{'='*60}")
+    
+    # Display data summary
+    summary = data.summary()
+    print(f"\nDATA SUMMARY:")
+    print(f"  • Wells: {summary['wells']}")
+    print(f"  • Grid: {summary['grid_dimensions']}")
+    print(f"  • Production data: {'Available' if summary['has_production_data'] else 'Not available'}")
+    
+    if summary['has_production_data']:
+        print(f"  • Max rate: {summary['max_production_rate']:.1f} bbl/day")
+        print(f"  • Total production: {summary['total_production']:,.0f} bbl")
+    
+    # Run simulation
+    simulator = ReservoirSimulator(data, params)
+    results = simulator.run_comprehensive_simulation()
+    
+    # Display key results
+    if 'economic_analysis' in results:
+        econ = results['economic_analysis']
+        print(f"\nECONOMIC RESULTS:")
+        print(f"  • NPV: ${econ.get('npv', 0)/1e6:.2f}M")
+        print(f"  • IRR: {econ.get('irr', 0)*100:.1f}%")
+        print(f"  • ROI: {econ.get('roi', 0)*100:.1f}%")
+        print(f"  • Payback: {econ.get('payback_period_years', 0):.1f} years")
+    
+    return results
 
 def main():
+    """Main entry point."""
     print("="*60)
     print("RESERVOIR SIMULATION PROJECT - PhD LEVEL")
     print("="*60)
     
-    print("\nSelect mode:")
-    print("1. Google Drive (requires internet connection)")
-    print("2. Sample Data (local simulation)")
+    print("\nSelect data source:")
+    print("1. Google Drive (6 SPE9 datasets)")
+    print("2. Sample data (for testing)")
     
     choice = input("\nEnter choice (1 or 2): ").strip()
     
-    print("\n" + "="*60)
-    
     if choice == '1':
-        print("🔗 GOOGLE DRIVE MODE")
-        print("-" * 40)
-        data = load_google_drive_data()
+        print("\n" + "="*60)
+        print("GOOGLE DRIVE MODE - LOADING 6 SPE9 DATASETS")
+        print("="*60)
+        
+        file_ids = [
+            '13twFcFA35CKbI8neIzIt-D54dzDd1B-N',  # SPE9.DATA.txt
+            '1n_auKzsDz5aHglQ4YvskjfHPK8ZuLBqC',
+            '1bdyUFKx-FKPy7YOlq-E9Y4nupcrhOoXi',
+            '1f0aJFS99ZBVkT8IXbKdZdVihbIZIpBwZ',
+            '1sxq7sd4GSL-chE362k8wTLA_arehaD5U',
+            '1ZwEswptUcexDn_kqm_q8qRcHYTl1WHq2'
+        ]
+        
+        datasets = DataLoader.load_multiple_files(file_ids)
+        
+        if not datasets:
+            print("\nERROR: Could not load any datasets.")
+            print("Falling back to sample data...")
+            data = ReservoirData()
+            data.create_sample_data()
+            datasets = {'sample': data}
     else:
-        print("📊 SAMPLE DATA MODE")
-        print("-" * 40)
+        print("\n" + "="*60)
+        print("SAMPLE DATA MODE")
+        print("="*60)
         data = ReservoirData()
         data.create_sample_data()
-        print("✓ Sample data created")
+        datasets = {'sample': data}
     
-    summary = data.summary()
-    print("\n" + "="*50)
-    print("DATA SUMMARY")
-    print("="*50)
-    print(f"• Wells: {summary['wells']}")
-    print(f"• Time Points: {summary['time_points']}")
-    print(f"• Production Available: {'Yes' if data.has_production_data else 'No'}")
-    print(f"• Pressure Available: {'Yes' if data.has_pressure_data else 'No'}")
+    print(f"\n✓ Loaded {len(datasets)} datasets")
     
-    if data.has_production_data:
-        prod_stats = summary['production_range']
-        print(f"• Production Range: {prod_stats['min']:.1f} to {prod_stats['max']:.1f}")
-    
-    if data.has_pressure_data:
-        pres_stats = summary['pressure_range']
-        print(f"• Pressure Range: {pres_stats['min']:.1f} to {pres_stats['max']:.1f}")
-    
+    # Get simulation parameters
     params = get_simulation_parameters()
     
-    print("\n" + "="*50)
-    print("RUNNING SIMULATION")
-    print("="*50)
+    # Run simulation for each dataset
+    all_results = {}
+    for dataset_name, data in datasets.items():
+        results = run_simulation_for_dataset(data, params, dataset_name)
+        all_results[dataset_name] = results
     
-    print("\n🔬 Running data analysis...")
-    simulator = ReservoirSimulator(data, params)
-    
-    print("\n⚡ Running reservoir simulation...")
-    results = simulator.run_comprehensive_simulation()
-    
-    print("\n🎨 Creating visualizations...")
-    
-    output_dir = './outputs'
-    os.makedirs(output_dir, exist_ok=True)
-    
-    print("\n💾 Exporting results...")
-    export_files = simulator.export_results(output_dir)
-    
-    print("\n" + "="*50)
-    print("EXPORT RESULTS")
-    print("="*50)
-    print(f"✓ Results exported to: {output_dir}")
-    
-    for file_type, file_path in export_files.items():
-        if os.path.exists(file_path):
-            file_size = os.path.getsize(file_path)
-            print(f"  • {file_type.upper():10} : {os.path.basename(file_path)} ({file_size:,} bytes)")
+    # Compare results if multiple datasets
+    if len(datasets) > 1:
+        print("\n" + "="*60)
+        print("DATASET COMPARISON")
+        print("="*60)
+        
+        comparison_data = []
+        for dataset_name, results in all_results.items():
+            if 'economic_analysis' in results:
+                econ = results['economic_analysis']
+                comparison_data.append({
+                    'Dataset': dataset_name,
+                    'NPV ($M)': econ.get('npv', 0)/1e6,
+                    'IRR (%)': econ.get('irr', 0)*100,
+                    'ROI (%)': econ.get('roi', 0)*100,
+                    'Payback (years)': econ.get('payback_period_years', 0)
+                })
+        
+        # Display comparison table
+        if comparison_data:
+            import pandas as pd
+            df = pd.DataFrame(comparison_data)
+            print(f"\n{df.to_string(index=False)}")
     
     print("\n" + "="*60)
-    print("✅ SIMULATION COMPLETED SUCCESSFULLY")
+    print("SIMULATION COMPLETED")
     print("="*60)
-    
-    if 'economic_analysis' in results:
-        econ = results['economic_analysis']
-        print(f"\n📊 FINAL RESULTS:")
-        print(f"  • NPV: ${econ.get('npv', 0)/1e6:.2f}M")
-        print(f"  • IRR: {econ.get('irr', 0)*100:.1f}%")
-        print(f"  • ROI: {econ.get('roi', 0):.1f}%")
-
 
 if __name__ == "__main__":
     main()
