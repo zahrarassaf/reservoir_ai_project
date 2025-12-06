@@ -1,4 +1,4 @@
-# src/data_loader.py
+# src/data_loader.py - نسخه اصلاح شده
 import pandas as pd
 import numpy as np
 import gdown
@@ -30,51 +30,93 @@ class DataLoader:
     
     def _process_csv_file(self, file_path: str) -> bool:
         try:
-            df = pd.read_csv(file_path)
+            # Try different CSV reading strategies
+            df = None
+            for engine in ['python', 'c']:
+                try:
+                    df = pd.read_csv(file_path, engine=engine, on_bad_lines='skip')
+                    if len(df) > 0:
+                        break
+                except:
+                    continue
+            
+            if df is None or len(df) == 0:
+                print(f"No valid data in {file_path}, using synthetic")
+                return self._generate_synthetic_data()
+            
+            # Clean column names
+            df.columns = [str(col).strip() for col in df.columns]
             
             time_column = None
             rate_column = None
             
+            # Find time column
             for col in df.columns:
-                col_lower = col.lower()
-                if 'time' in col_lower or 'date' in col_lower or 'days' in col_lower:
+                col_lower = str(col).lower()
+                if any(keyword in col_lower for keyword in ['time', 'date', 'days', 'month', 't']):
                     time_column = col
-                elif 'oil' in col_lower or 'rate' in col_lower or 'prod' in col_lower:
-                    rate_column = col
+                    break
             
-            if not time_column:
+            if not time_column and len(df.columns) > 0:
                 time_column = df.columns[0]
-            if not rate_column:
-                rate_column = df.columns[1] if len(df.columns) > 1 else df.columns[0]
             
-            time_data = df[time_column].values
-            rate_data = df[rate_column].values
+            # Find rate column
+            for col in df.columns:
+                if col == time_column:
+                    continue
+                col_lower = str(col).lower()
+                if any(keyword in col_lower for keyword in ['oil', 'rate', 'prod', 'opr', 'fopr', 'bbl', 'stb']):
+                    rate_column = col
+                    break
             
-            if len(time_data) > 0 and len(rate_data) > 0:
-                self.reservoir_data = {
-                    'wells': {
-                        'FIELD_01': WellProductionData(
-                            time_points=time_data,
-                            oil_rate=rate_data,
-                            well_type='PRODUCER'
-                        )
-                    },
-                    'grid': {
-                        'dimensions': (24, 25, 15),
-                        'porosity': np.random.uniform(0.15, 0.25, 1000)
-                    }
-                }
-                return True
-            else:
+            if not rate_column and len(df.columns) > 1:
+                rate_column = df.columns[1]
+            elif not rate_column:
+                rate_column = df.columns[0]
+            
+            # Extract data
+            time_data = pd.to_numeric(df[time_column], errors='coerce').dropna().values
+            rate_data = pd.to_numeric(df[rate_column], errors='coerce').dropna().values
+            
+            if len(time_data) == 0 or len(rate_data) == 0:
+                print(f"No numeric data in {file_path}, using synthetic")
                 return self._generate_synthetic_data()
-                
+            
+            # Ensure same length
+            min_len = min(len(time_data), len(rate_data))
+            time_data = time_data[:min_len]
+            rate_data = rate_data[:min_len]
+            
+            # Convert to appropriate units if needed
+            if max(rate_data) < 1:  # Probably in MMbbl/day
+                rate_data = rate_data * 1_000_000
+            elif max(rate_data) < 1000:  # Probably in Mbbl/day
+                rate_data = rate_data * 1_000
+            
+            self.reservoir_data = {
+                'wells': {
+                    'WELL_01': WellProductionData(
+                        time_points=time_data,
+                        oil_rate=rate_data,
+                        well_type='PRODUCER'
+                    )
+                },
+                'grid': {
+                    'dimensions': (24, 25, 15),
+                    'porosity': np.random.uniform(0.15, 0.25, 1000)
+                }
+            }
+            
+            print(f"Processed {file_path}: {len(time_data)} data points")
+            return True
+            
         except Exception as e:
             print(f"Error processing {file_path}: {e}")
             return self._generate_synthetic_data()
     
     def _generate_synthetic_data(self) -> bool:
         try:
-            time_points = np.linspace(0, 1825, 60)
+            time_points = np.linspace(0, 1825, 60)  # 5 years
             
             self.reservoir_data = {
                 'wells': {
@@ -99,6 +141,7 @@ class DataLoader:
                     'porosity': np.random.uniform(0.18, 0.22, 1000)
                 }
             }
+            print("Generated synthetic data")
             return True
             
         except Exception as e:
