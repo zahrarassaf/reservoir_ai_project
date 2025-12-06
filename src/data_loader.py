@@ -400,33 +400,12 @@ class ReservoirData:
         if not tstep_values:
             logger.warning("No TSTEP found, using SPE9 default schedule")
             # SPE9 schedule: 30*10, 6*10, 54*10 = 900 days
-            tstep_values = [10]*30 + [10]*6 + [10]*54
+            tstep_values = [10.0]*30 + [10.0]*6 + [10.0]*54
         
         # Calculate cumulative time points
         cumulative_time = np.cumsum(tstep_values)
         schedule_data['time_points'].extend(cumulative_time.tolist())
         schedule_data['total_days'] = cumulative_time[-1]
-        
-        # Parse control changes (WCONPROD changes in schedule)
-        current_time = 0
-        control_changes = []
-        
-        for i, line in enumerate(lines):
-            line_upper = line.upper()
-            if 'WCONPROD' in line_upper and not line.strip().startswith('--'):
-                # Check if this is a schedule change (not initial definition)
-                # Initial definition usually near top, schedule changes after TSTEP
-                # For simplicity, track all WCONPROD occurrences
-                control_changes.append({
-                    'time': current_time,
-                    'line': line_upper
-                })
-            
-            # Update current time based on TSTEP
-            if 'TSTEP' in line_upper and not line.strip().startswith('--'):
-                # When we see TSTEP, we're at the end of a control period
-                # The actual time increment happens after parsing TSTEP values
-                pass
         
         logger.info(f"Schedule: {len(schedule_data['time_points'])} time points, "
                    f"total {schedule_data['total_days']} days")
@@ -438,7 +417,7 @@ class ReservoirData:
         Generate realistic production and pressure profiles based on well controls
         and reservoir properties.
         """
-        time_points = np.array(schedule_data['time_points'])
+        time_points = np.array(schedule_data['time_points'], dtype=np.float64)
         total_days = schedule_data['total_days']
         
         for well_name, well in self.wells.items():
@@ -451,16 +430,17 @@ class ReservoirData:
             if is_injector:
                 # Injection well profile
                 # Constant injection rate with some operational variations
-                base_rate = -5000  # STB/day, negative for injection
-                rates = np.full(n_points, base_rate)
+                base_rate = -5000.0  # STB/day, negative for injection
+                rates = np.full(n_points, base_rate, dtype=np.float64)
                 
                 # Add some operational noise
-                noise = np.random.normal(0, 200, n_points)
-                rates += noise
+                noise = np.random.normal(0, 200, n_points).astype(np.float64)
+                rates = rates + noise  # FIXED: Use explicit addition instead of +=
                 
                 # Injection pressure profile
-                base_pressure = 4000  # psia
+                base_pressure = 4000.0  # psia
                 pressures = base_pressure + np.random.normal(0, 100, n_points)
+                pressures = pressures.astype(np.float64)
                 
             else:
                 # Production well profile using Arps decline curve
@@ -471,7 +451,7 @@ class ReservoirData:
                 
                 # Wells in center typically have better productivity
                 centrality = 1.0 - abs(i_norm - 0.5) - abs(j_norm - 0.5)
-                qi = 800 + centrality * 1200  # Initial rate 800-2000 STB/day
+                qi = 800.0 + centrality * 1200.0  # Initial rate 800-2000 STB/day
                 
                 # Decline parameters based on reservoir quality
                 avg_poro = np.mean(self.porosity) if len(self.porosity) > 0 else 0.15
@@ -486,14 +466,14 @@ class ReservoirData:
                 # and back to 1500 at day 360
                 mask_300 = time_points >= 300
                 mask_360 = time_points >= 360
-                rates[mask_300 & ~mask_360] *= (100/1500)  # Rate reduction
+                rates = np.where(mask_300 & ~mask_360, rates * (100/1500), rates)
                 
                 # Add realistic noise and operational variations
                 operational_noise = np.random.normal(0, qi * 0.05, n_points)
-                rates += operational_noise
+                rates = rates + operational_noise  # FIXED: Use explicit addition
                 
                 # Ensure rates are positive
-                rates = np.maximum(0, rates)
+                rates = np.maximum(0.0, rates)
                 
                 # Pressure profile (simplified)
                 # Initial reservoir pressure minus drawdown
@@ -501,20 +481,24 @@ class ReservoirData:
                 pressures = self._initial_pressure - drawdown_factor * 1000
                 
                 # Minimum flowing bottomhole pressure
-                min_bhp = 1000  # psia
+                min_bhp = 1000.0  # psia
                 pressures = np.maximum(min_bhp, pressures)
                 
                 # Add some reservoir pressure support effects
                 if 'INJE' in self.wells:
                     # Pressure support from injector
-                    injection_support = 200 * (1 - np.exp(-time_points / 500))
-                    pressures += injection_support
+                    injection_support = 200.0 * (1 - np.exp(-time_points / 500))
+                    pressures = pressures + injection_support  # FIXED: Use explicit addition
             
             # Smooth the profiles
             if n_points > 10:
                 from scipy.ndimage import gaussian_filter1d
                 rates = gaussian_filter1d(rates, sigma=2)
                 pressures = gaussian_filter1d(pressures, sigma=2)
+            
+            # Ensure float64 type
+            rates = rates.astype(np.float64)
+            pressures = pressures.astype(np.float64)
             
             well.time_points = time_points
             well.production_rates = rates
@@ -628,7 +612,7 @@ class ReservoirData:
         self.porosity = np.random.uniform(0.08, 0.18, n_cells)
         
         # Create time points (daily for specified period)
-        time_points = np.arange(0, n_time_points)
+        time_points = np.arange(0, n_time_points, dtype=np.float64)
         
         # Create wells with realistic properties
         for i in range(n_wells):
@@ -647,9 +631,9 @@ class ReservoirData:
             
             if is_injector:
                 # Injection well profile
-                base_rate = -4000  # Negative for injection
+                base_rate = -4000.0  # Negative for injection
                 rates = base_rate + np.random.normal(0, 200, n_time_points)
-                pressures = 3800 + np.random.normal(0, 100, n_time_points)
+                pressures = 3800.0 + np.random.normal(0, 100, n_time_points)
                 completion_zones = [11, 12, 13, 14, 15]  # Lower zones for injection
             else:
                 # Production well with decline curve
@@ -662,17 +646,17 @@ class ReservoirData:
                 
                 # Add monthly operational variations
                 monthly_cycle = 50 * np.sin(2 * np.pi * time_points / 30)
-                rates += monthly_cycle
+                rates = rates + monthly_cycle
                 
                 # Add random noise
-                rates += np.random.normal(0, qi * 0.05, n_time_points)
-                rates = np.maximum(0, rates)  # No negative rates
+                rates = rates + np.random.normal(0, qi * 0.05, n_time_points)
+                rates = np.maximum(0.0, rates)  # No negative rates
                 
                 # Pressure profile
-                initial_pressure = 3600
+                initial_pressure = 3600.0
                 drawdown = (rates / qi) * 800
                 pressures = initial_pressure - drawdown
-                pressures = np.maximum(1200, pressures)  # Minimum flowing pressure
+                pressures = np.maximum(1200.0, pressures)  # Minimum flowing pressure
                 
                 # Random completion zones (typically upper zones)
                 n_zones = np.random.randint(3, 8)
@@ -683,8 +667,8 @@ class ReservoirData:
             self.wells[well_name] = WellData(
                 name=well_name,
                 time_points=time_points,
-                production_rates=rates,
-                pressures=pressures,
+                production_rates=rates.astype(np.float64),
+                pressures=pressures.astype(np.float64),
                 coordinates=(x, y, z),
                 completion_zones=completion_zones
             )
