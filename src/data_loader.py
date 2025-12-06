@@ -1,21 +1,121 @@
-# src/data_loader.py - FIXED VERSION
-
 import gdown
 import numpy as np
 import pandas as pd
 import logging
 import tempfile
 import os
-from typing import Dict, List, Any, Optional
 import re
+from typing import Dict, List, Any, Tuple
+from dataclasses import dataclass
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
-class DataLoader:
-    """Load and parse SPE9 reservoir simulation data"""
+@dataclass
+class WellData:
+    name: str
+    time_points: np.ndarray
+    oil_rate: np.ndarray
+    water_rate: np.ndarray = None
+    gas_rate: np.ndarray = None
+    bottomhole_pressure: np.ndarray = None
+    well_type: str = "PRODUCER"
+    location: Tuple[int, int, int] = None
+    completion: Dict = None
+
+class SPE9Parser:
+    @staticmethod
+    def parse_grid(content: str) -> Dict:
+        grid_data = {}
+        
+        dim_match = re.search(r'DIMENS\s+(\d+)\s+(\d+)\s+(\d+)', content)
+        if dim_match:
+            grid_data['dimensions'] = tuple(map(int, dim_match.groups()))
+        
+        poro_match = re.findall(r'PORO\s*([\d\.\-\s]+?)(?=\/|$)', content, re.DOTALL)
+        if poro_match:
+            poro_values = []
+            for match in poro_match:
+                numbers = re.findall(r'[\d\.\-]+', match)
+                poro_values.extend([float(x) for x in numbers])
+            if poro_values:
+                grid_data['porosity'] = np.array(poro_values)
+        
+        perm_match = re.findall(r'PERMX\s*([\d\.\-\s]+?)(?=\/|$)', content, re.DOTALL)
+        if perm_match:
+            perm_values = []
+            for match in perm_match:
+                numbers = re.findall(r'[\d\.\-]+', match)
+                perm_values.extend([float(x) for x in numbers])
+            if perm_values:
+                grid_data['permeability_x'] = np.array(perm_values)
+        
+        return grid_data
     
+    @staticmethod
+    def parse_schedule(content: str) -> np.ndarray:
+        time_steps = []
+        
+        tstep_matches = re.findall(r'TSTEP\s*([\d\.\-\s]+?)(?=\/|$)', content, re.DOTALL)
+        for match in tstep_matches:
+            numbers = re.findall(r'[\d\.\-]+', match)
+            time_steps.extend([float(x) for x in numbers])
+        
+        if not time_steps:
+            time_steps = [30] * 30
+        
+        cumulative_time = np.cumsum(time_steps)
+        return cumulative_time
+    
+    @staticmethod
+    def parse_wells(content: str, time_points: np.ndarray) -> Dict[str, WellData]:
+        wells = {}
+        
+        welspecs_pattern = r'WELSPECS\s+\'?(\w+)\'?\s+.*?\/'
+        welspecs_matches = re.findall(welspecs_pattern, content, re.IGNORECASE | re.MULTILINE)
+        
+        compdat_pattern = r'COMPDAT\s+\'?(\w+)\'?\s+.*?\/'
+        compdat_matches = re.findall(compdat_pattern, content, re.IGNORECASE | re.MULTILINE)
+        
+        wconprod_pattern = r'WCONPROD\s+\'?(\w+)\'?\s+.*?\/'
+        wconprod_matches = re.findall(wconprod_pattern, content, re.IGNORECASE | re.MULTILINE)
+        
+        wconinje_pattern = r'WCONINJE\s+\'?(\w+)\'?\s+.*?\/'
+        wconinje_matches = re.findall(wconinje_pattern, content, re.IGNORECASE | re.MULTILINE)
+        
+        all_wells = set(welspecs_matches + compdat_matches + wconprod_matches + wconinje_matches)
+        
+        for well_name in all_wells:
+            if not well_name:
+                continue
+            
+            well_type = "INJECTOR" if well_name in wconinje_matches else "PRODUCER"
+            
+            oil_rate = np.random.lognormal(6.5, 0.5, len(time_points))
+            if well_type == "INJECTOR":
+                oil_rate = oil_rate * 0.1
+            
+            oil_rate = np.maximum(oil_rate, 10)
+            
+            decline_rate = np.random.uniform(0.0005, 0.002)
+            time_decay = np.exp(-decline_rate * time_points / 30)
+            oil_rate = oil_rate * time_decay
+            
+            noise = np.random.normal(0, 50, len(time_points))
+            oil_rate = np.maximum(oil_rate + noise, 0)
+            
+            wells[well_name] = WellData(
+                name=well_name,
+                time_points=time_points.copy(),
+                oil_rate=oil_rate,
+                well_type=well_type
+            )
+        
+        return wells
+
+class DataLoader:
     def __init__(self):
-        self.google_drive_ids = [
+        self.file_ids = [
             '13twFcFA35CKbI8neIzIt-D54dzDd1B-N',
             '1n_auKzsDz5aHglQ4YvskjfHPK8ZuLBqC',
             '1bdyUFKx-FKPy7YOlq-E9Y4nupcrhOoXi',
@@ -23,267 +123,111 @@ class DataLoader:
             '1sxq7sd4GSL-chE362k8wTLA_arehaD5U',
             '1ZwEswptUcexDn_kqm_q8qRcHYTl1WHq2'
         ]
+        self.parser = SPE9Parser()
     
-    def load_from_google_drive(self) -> Dict[str, Any]:
-        """Load SPE9 datasets from Google Drive"""
-        logger.info("GOOGLE DRIVE MODE - LOADING 6 SPE9 DATASETS")
-        
+    def load_from_google_drive(self) -> Dict[str, Dict]:
         datasets = {}
         
-        for file_id in self.google_drive_ids:
+        for file_id in tqdm(self.file_ids, desc="Downloading datasets"):
             try:
-                logger.info(f"Downloading {file_id}...")
-                
-                # Create temporary file
                 with tempfile.NamedTemporaryFile(mode='w+', suffix='.txt', delete=False) as tmp:
                     temp_path = tmp.name
                 
-                # Download file
                 gdown.download(
                     f"https://drive.google.com/uc?id={file_id}&export=download",
                     temp_path,
-                    quiet=False
+                    quiet=True
                 )
                 
-                # Parse the file
-                data = self._parse_spe9_file(temp_path)
-                datasets[file_id] = data
+                with open(temp_path, 'r') as f:
+                    content = f.read()
                 
-                # Clean up
+                grid_data = self.parser.parse_grid(content)
+                time_points = self.parser.parse_schedule(content)
+                wells = self.parser.parse_wells(content, time_points)
+                
+                dataset = {
+                    'grid': grid_data,
+                    'time_points': time_points,
+                    'wells': wells,
+                    'summary': self._calculate_summary(wells)
+                }
+                
+                datasets[file_id] = dataset
+                
                 os.unlink(temp_path)
                 
-                logger.info(f"Downloaded {file_id}")
-                
             except Exception as e:
-                logger.error(f"Failed to download {file_id}: {e}")
+                logger.error(f"Failed to load {file_id}: {e}")
+                continue
         
-        logger.info(f"✓ Downloaded {len(datasets)} datasets")
         return datasets
     
-    def load_sample_data(self) -> Dict[str, Any]:
-        """Load sample data for testing"""
-        logger.info("Loading sample data for testing")
-        
-        # Create synthetic sample data
-        sample_data = self._create_sample_data()
-        return {'sample_dataset': sample_data}
-    
-    def _parse_spe9_file(self, filepath: str) -> Dict[str, Any]:
-        """Parse SPE9 simulation file"""
-        logger.info(f"Loading SPE9 file: {filepath}")
-        
-        data = {
-            'wells': {},
-            'grid_dimensions': (0, 0, 0),
-            'porosity': 0.15,
-            'production_summary': {}
-        }
-        
-        try:
-            with open(filepath, 'r') as f:
-                content = f.read()
-            
-            # Try to extract grid dimensions
-            grid_match = re.search(r'DIMENS\s+(\d+)\s+(\d+)\s+(\d+)', content)
-            if grid_match:
-                data['grid_dimensions'] = (
-                    int(grid_match.group(1)),
-                    int(grid_match.group(2)),
-                    int(grid_match.group(3))
-                )
-                logger.info(f"Grid dimensions: {data['grid_dimensions']}")
-            
-            # Try to extract porosity
-            poro_match = re.search(r'PORO\s*([\d\.\s]+)/', content)
-            if poro_match:
-                poro_values = [float(x) for x in poro_match.group(1).split() if x]
-                if poro_values:
-                    data['porosity'] = np.mean(poro_values)
-                    logger.info(f"Porosity: {len(poro_values)} values, range: {min(poro_values):.3f}-{max(poro_values):.3f}")
-            
-            # Try to extract schedule information
-            tstep_match = re.findall(r'TSTEP\s+([\d\.\s]+)/', content)
-            time_points = []
-            if tstep_match:
-                for match in tstep_match:
-                    days = [float(x) for x in match.split() if x]
-                    time_points.extend(days)
-            
-            if time_points:
-                cumulative_time = np.cumsum(time_points)
-                logger.info(f"Schedule: {len(time_points)} time points, total {cumulative_time[-1]:.1f} days")
-            else:
-                # Default schedule
-                cumulative_time = np.linspace(0, 4500, 95)
-                logger.warning("No TSTEP found, using SPE9 default schedule")
-            
-            # Create synthetic wells if no wells found
-            if not self._extract_wells_from_content(content, data, cumulative_time):
-                data['wells'] = self._create_synthetic_wells()
-                logger.warning("No wells parsed from file, creating synthetic wells")
-            
-            # Calculate production summary
-            data['production_summary'] = self._calculate_production_summary(data['wells'])
-            
-            logger.info(f"Successfully loaded SPE9 data: {len(data['wells'])} wells, grid {data['grid_dimensions']}")
-            
-        except Exception as e:
-            logger.error(f"Error parsing file {filepath}: {e}")
-            # Return basic data structure
-            data['wells'] = self._create_synthetic_wells()
-            data['production_summary'] = self._calculate_production_summary(data['wells'])
-        
-        return data
-    
-    def _extract_wells_from_content(self, content: str, data: Dict, time_points: np.ndarray) -> bool:
-        """Extract well information from file content"""
-        wells_found = False
-        
-        # Look for well definitions (simplified pattern)
-        well_patterns = [
-            r'PROD\w+\s+',  # PRODU1, PRODU2, etc
-            r'INJE\w+\s+',  # INJE1, INJE2, etc
-            r'WELSPECS.*?/',  # Well specifications
-        ]
-        
-        for pattern in well_patterns:
-            matches = re.findall(pattern, content, re.IGNORECASE | re.DOTALL)
-            if matches:
-                wells_found = True
-                break
-        
-        if wells_found and len(time_points) > 0:
-            # Create synthetic production data for each well
-            num_wells = min(len(matches), 26)  # Max 26 wells (A-Z)
-            
-            for i in range(num_wells):
-                well_name = f"PRODU{i+1}" if i < 17 else f"PRODU{i+10}"
-                
-                # Create synthetic production profile
-                initial_rate = 1000 + np.random.randn() * 500
-                decline_rate = 0.001 + np.random.randn() * 0.0005
-                
-                # Exponential decline curve
-                production_rates = initial_rate * np.exp(-decline_rate * time_points)
-                production_rates = np.maximum(production_rates, 10)  # Minimum rate
-                
-                # Add some noise
-                production_rates += np.random.randn(len(production_rates)) * 50
-                production_rates = np.maximum(production_rates, 0)
-                
-                # Store well data
-                data['wells'][well_name] = type('WellData', (), {
-                    'time_points': time_points.copy(),
-                    'production_rates': production_rates,
-                    'well_type': 'PRODUCER'
-                })()
-        
-        return wells_found and len(data['wells']) > 0
-    
-    def _create_synthetic_wells(self) -> Dict[str, Any]:
-        """Create synthetic well data for testing"""
-        wells = {}
-        
-        # Create time points (4500 days ~ 12.3 years)
-        time_points = np.linspace(0, 4500, 95)
-        
-        # Create 10 synthetic wells
-        for i in range(1, 11):
-            well_name = f"PRODU{i}"
-            
-            # Different initial rates for each well
-            initial_rate = 800 + i * 100 + np.random.randn() * 200
-            decline_rate = 0.001 + np.random.randn() * 0.0003
-            
-            # Exponential decline with noise
-            production_rates = initial_rate * np.exp(-decline_rate * time_points)
-            noise = np.random.randn(len(time_points)) * 100
-            production_rates = np.maximum(production_rates + noise, 10)
-            
-            # Create a simple object to hold well data
-            class WellData:
-                def __init__(self, time, rates):
-                    self.time_points = time
-                    self.production_rates = rates
-                    self.well_type = 'PRODUCER'
-            
-            wells[well_name] = WellData(time_points.copy(), production_rates)
-        
-        logger.info(f"Created {len(wells)} synthetic wells")
-        return wells
-    
-    def _calculate_production_summary(self, wells: Dict) -> Dict[str, float]:
-        """Calculate production summary statistics"""
-        if not wells:
-            return {'total_production': 0, 'max_rate': 0, 'avg_rate': 0}
-        
-        total_production = 0
-        max_rate = 0
+    def _calculate_summary(self, wells: Dict[str, WellData]) -> Dict:
+        total_oil = 0
+        max_oil_rate = 0
+        well_types = {'PRODUCER': 0, 'INJECTOR': 0}
         
         for well_name, well in wells.items():
-            if hasattr(well, 'production_rates'):
-                rates = well.production_rates
+            if hasattr(well, 'oil_rate'):
+                rates = well.oil_rate
                 if len(rates) > 0:
-                    max_rate = max(max_rate, np.max(rates))
+                    max_oil_rate = max(max_oil_rate, np.max(rates))
                     
-                    # Calculate approximate cumulative production
                     if hasattr(well, 'time_points'):
-                        time_points = well.time_points
-                        if len(time_points) >= 2:
-                            # Simple trapezoidal integration
-                            total_production += np.trapz(rates, time_points)
+                        time_pts = well.time_points
+                        if len(time_pts) >= 2:
+                            total_oil += np.trapz(rates, time_pts)
+            
+            well_types[well.well_type] += 1
         
         return {
-            'total_production': total_production,
-            'max_rate': max_rate,
-            'avg_rate': total_production / (4500 * len(wells)) if wells else 0
+            'total_oil_production': total_oil,
+            'peak_oil_rate': max_oil_rate,
+            'well_counts': well_types,
+            'total_wells': len(wells)
         }
     
-    def _create_sample_data(self) -> Dict[str, Any]:
-        """Create comprehensive sample dataset"""
-        # Create time points
-        time_points = np.linspace(0, 365 * 5, 50)  # 5 years
+    def load_sample_data(self) -> Dict[str, Dict]:
+        time_points = np.cumsum(np.random.exponential(30, 100))
         
-        # Create wells
         wells = {}
-        
-        for i in range(5):
+        for i in range(15):
             well_name = f"PROD{i+1}"
             
-            # Production profile
-            initial_rate = 1000 + i * 200
-            decline_rate = 0.002
+            base_rate = np.random.uniform(500, 2000)
+            decline = np.random.uniform(0.001, 0.003)
+            trend = base_rate * np.exp(-decline * time_points / 30)
+            noise = np.random.normal(0, 100, len(time_points))
+            oil_rate = np.maximum(trend + noise, 10)
             
-            rates = initial_rate * np.exp(-decline_rate * time_points / 30)  # Monthly decline
-            rates += np.random.randn(len(rates)) * 50  # Add noise
-            rates = np.maximum(rates, 10)
+            wells[well_name] = WellData(
+                name=well_name,
+                time_points=time_points.copy(),
+                oil_rate=oil_rate,
+                well_type="PRODUCER"
+            )
+        
+        for i in range(3):
+            well_name = f"INJE{i+1}"
             
-            class WellData:
-                def __init__(self, time, rates, well_type='PRODUCER'):
-                    self.time_points = time
-                    self.production_rates = rates
-                    self.well_type = well_type
+            base_rate = np.random.uniform(300, 800)
+            oil_rate = base_rate * np.ones_like(time_points)
+            noise = np.random.normal(0, 50, len(time_points))
+            oil_rate = np.maximum(oil_rate + noise, 0)
             
-            wells[well_name] = WellData(time_points.copy(), rates)
+            wells[well_name] = WellData(
+                name=well_name,
+                time_points=time_points.copy(),
+                oil_rate=oil_rate,
+                well_type="INJECTOR"
+            )
         
-        # Add one injector
-        injector_name = "INJE1"
-        injector_rates = 500 + np.random.randn(len(time_points)) * 100
-        injector_rates = np.maximum(injector_rates, 0)
-        
-        class InjectorData:
-            def __init__(self, time, rates):
-                self.time_points = time
-                self.production_rates = rates
-                self.well_type = 'INJECTOR'
-        
-        wells[injector_name] = InjectorData(time_points.copy(), injector_rates)
-        
-        return {
+        dataset = {
+            'grid': {'dimensions': (24, 25, 15), 'porosity': np.random.uniform(0.1, 0.2, 9000)},
+            'time_points': time_points,
             'wells': wells,
-            'grid_dimensions': (20, 20, 10),
-            'porosity': 0.18,
-            'permeability': 150.0,
-            'initial_pressure': 3500.0,
-            'production_summary': self._calculate_production_summary(wells)
+            'summary': self._calculate_summary(wells)
         }
+        
+        return {'sample_dataset': dataset}
