@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class WellData:
-    """Data container for individual well information."""
     name: str
     time_points: np.ndarray
     production_rates: np.ndarray
@@ -21,7 +20,6 @@ class WellData:
     completion_zones: List[int]
     
     def validate(self) -> bool:
-        """Validate well data consistency."""
         if len(self.time_points) != len(self.production_rates):
             return False
         if len(self.time_points) != len(self.pressures):
@@ -29,7 +27,6 @@ class WellData:
         return True
     
     def summary(self) -> Dict:
-        """Generate summary statistics for the well."""
         return {
             'name': self.name,
             'data_points': len(self.time_points),
@@ -41,13 +38,7 @@ class WellData:
             'min_pressure': float(np.min(self.pressures)) if len(self.pressures) > 0 else 0
         }
 
-
 class ReservoirData:
-    """
-    Main class for loading and processing reservoir simulation data.
-    Supports SPE9 format and other reservoir data formats.
-    """
-    
     def __init__(self):
         self.wells: Dict[str, WellData] = {}
         self.grid_dimensions: Tuple[int, int, int] = (0, 0, 0)
@@ -55,25 +46,16 @@ class ReservoirData:
         self.permeability: np.ndarray = np.array([])
         self.depth_top: np.ndarray = np.array([])
         self.time_unit: str = "days"
-        self.production_unit: str = "STB/day"  # Stock Tank Barrels per day
+        self.production_unit: str = "STB/day"
         self.pressure_unit: str = "psia"
-        self._initial_pressure: float = 3600.0  # Initial reservoir pressure from SPE9
-        self._oil_fvf: float = 1.12  # Oil formation volume factor (rb/STB)
-        self._water_fvf: float = 1.0034  # Water formation volume factor
-        self._gas_fvf: float = 0.001  # Gas formation volume factor (rb/SCF)
-        self._rock_compressibility: float = 4e-6  # psi^-1
+        self._initial_pressure: float = 3600.0
+        self._oil_fvf: float = 1.12
+        self._water_fvf: float = 1.0034
+        self._gas_fvf: float = 0.001
+        self._rock_compressibility: float = 4e-6
         self._fluid_properties: Dict = {}
         
     def load_spe9_file(self, file_path: str) -> bool:
-        """
-        Load and parse SPE9 reservoir simulation data file.
-        
-        Args:
-            file_path: Path to SPE9.DATA file
-            
-        Returns:
-            bool: True if loading and parsing successful
-        """
         try:
             logger.info(f"Loading SPE9 file: {file_path}")
             
@@ -82,24 +64,16 @@ class ReservoirData:
             
             lines = content.split('\n')
             
-            # Parse basic reservoir properties
             self._parse_reservoir_properties(lines)
-            
-            # Parse well definitions and completions
             self._parse_well_definitions(lines)
-            
-            # Parse simulation schedule
             time_data = self._parse_simulation_schedule(lines)
             
-            # Generate production profiles
             if self.wells:
                 self._generate_realistic_profiles(time_data)
             else:
-                # Create synthetic wells if none parsed
                 self._create_synthetic_wells()
                 self._generate_realistic_profiles(time_data)
             
-            # Parse rock and fluid properties
             self._parse_rock_fluid_properties(lines)
             
             logger.info(f"Successfully loaded SPE9 data: {len(self.wells)} wells, "
@@ -113,15 +87,11 @@ class ReservoirData:
             return False
     
     def _parse_reservoir_properties(self, lines: List[str]) -> None:
-        """Parse reservoir grid and basic properties."""
-        # Parse DIMENS
         for i, line in enumerate(lines):
             if 'DIMENS' in line and not line.strip().startswith('--'):
-                # Find the line with numbers (usually next line)
                 for j in range(i+1, min(i+5, len(lines))):
                     dim_line = lines[j].strip()
                     if dim_line and not dim_line.startswith('--'):
-                        # Remove comments and slashes
                         dim_line = dim_line.split('--')[0].strip().strip('/')
                         if dim_line:
                             parts = dim_line.split()
@@ -137,12 +107,11 @@ class ReservoirData:
                             except ValueError:
                                 continue
         
-        # Parse PORO
         poro_values = []
         for i, line in enumerate(lines):
             if 'PORO' in line and not line.strip().startswith('--'):
                 j = i + 1
-                while j < len(lines) and j < i + 20:  # Look ahead reasonable amount
+                while j < len(lines) and j < i + 20:
                     current_line = lines[j].strip()
                     if current_line.startswith('--') or not current_line:
                         j += 1
@@ -150,7 +119,6 @@ class ReservoirData:
                     if '/' in current_line:
                         break
                     
-                    # Handle patterns like "600*0.087"
                     for token in current_line.split():
                         if '*' in token:
                             try:
@@ -174,10 +142,8 @@ class ReservoirData:
                 break
     
     def _parse_well_definitions(self, lines: List[str]) -> None:
-        """Parse well definitions from WELSPECS, COMPDAT, and control sections."""
         wells_info = {}
         
-        # 1. Parse WELSPECS for basic well information
         in_welspecs = False
         for i, line in enumerate(lines):
             if 'WELSPECS' in line and not line.strip().startswith('--'):
@@ -208,7 +174,6 @@ class ReservoirData:
                         except (ValueError, IndexError):
                             continue
         
-        # 2. Parse COMPDAT for completion intervals
         in_compdat = False
         for i, line in enumerate(lines):
             if 'COMPDAT' in line and not line.strip().startswith('--'):
@@ -238,7 +203,6 @@ class ReservoirData:
                             except (ValueError, IndexError):
                                 continue
         
-        # 3. Parse WCONPROD for production controls
         in_wconprod = False
         for i, line in enumerate(lines):
             line_upper = line.upper()
@@ -258,17 +222,15 @@ class ReservoirData:
                             try:
                                 control_mode = parts[2] if len(parts) > 2 else 'OPEN'
                                 target_rate = float(parts[3]) if len(parts) > 3 else 1500.0
-                                bhp_limit = 1000.0  # Default from SPE9
+                                bhp_limit = 1000.0
                                 
-                                # Try to find BHP in the line
                                 for part in parts:
                                     if part.replace('.', '').replace('-', '').isdigit():
                                         val = float(part)
-                                        if 500 < val < 5000:  # Reasonable BHP range
+                                        if 500 < val < 5000:
                                             bhp_limit = val
                                 
                                 if '*' in well_name:
-                                    # Apply to all production wells
                                     for wname in wells_info.keys():
                                         if 'PRODU' in wname:
                                             wells_info[wname]['controls'] = {
@@ -285,7 +247,6 @@ class ReservoirData:
                             except (ValueError, IndexError):
                                 continue
         
-        # 4. Parse WCONINJE for injection wells
         in_wconinje = False
         for i, line in enumerate(lines):
             if 'WCONINJE' in line and not line.strip().startswith('--'):
@@ -309,60 +270,58 @@ class ReservoirData:
                                 
                                 wells_info[well_name]['controls'] = {
                                     'mode': control_mode,
-                                    'target_rate': -target_rate,  # Negative for injection
+                                    'target_rate': -target_rate,
                                     'bhp_limit': bhp_limit,
                                     'injectant': injectant
                                 }
                             except (ValueError, IndexError):
                                 continue
         
-        # Create WellData objects
         for well_name, info in wells_info.items():
-            # Calculate coordinates (center of grid block)
-            dx, dy = 300, 300  # SPE9 grid spacing in feet
-            x = (info['i'] - 0.5) * dx
-            y = (info['j'] - 0.5) * dy
+            dx, dy = 300, 300
+            i_loc = info['i']
+            j_loc = info['j']
+            
+            if i_loc > 0 and j_loc > 0:
+                x = (i_loc - 0.5) * dx
+                y = (j_loc - 0.5) * dy
+            else:
+                x = 0.0
+                y = 0.0
+                
             z = info['ref_depth']
             
-            # Determine completion zones
             completion_zones = []
             for comp in info['completions']:
-                completion_zones.extend(range(comp['k_upper'], comp['k_lower'] + 1))
+                if 'k_upper' in comp and 'k_lower' in comp:
+                    completion_zones.extend(range(comp['k_upper'], comp['k_lower'] + 1))
             
             if not completion_zones:
-                # Default completions for SPE9 (layers 2-4)
                 completion_zones = [2, 3, 4]
             
             self.wells[well_name] = WellData(
                 name=well_name,
-                time_points=np.array([]),  # To be filled later
+                time_points=np.array([]),
                 production_rates=np.array([]),
                 pressures=np.array([]),
                 coordinates=(x, y, z),
                 completion_zones=completion_zones
             )
             
-            logger.debug(f"Created WellData for {well_name}: {info}")
+            logger.debug(f"Created WellData for {well_name}")
     
     def _parse_simulation_schedule(self, lines: List[str]) -> Dict:
-        """
-        Parse simulation schedule including TSTEP and control changes.
-        Returns dictionary with time points and control periods.
-        """
         schedule_data = {
-            'time_points': [0.0],  # Start at time 0
+            'time_points': [0.0],
             'control_periods': [],
             'total_days': 0
         }
         
-        # Find TSTEP sections
         tstep_values = []
         for i, line in enumerate(lines):
             if 'TSTEP' in line and not line.strip().startswith('--'):
-                # Look for numbers in this line and following lines
                 current_line = line.replace('TSTEP', '').strip()
                 
-                # Check current line
                 for token in current_line.split():
                     if token and token != '/':
                         try:
@@ -376,7 +335,6 @@ class ReservoirData:
                         except ValueError:
                             pass
                 
-                # Check next few lines
                 j = i + 1
                 while j < len(lines) and j < i + 10:
                     next_line = lines[j].strip()
@@ -396,13 +354,10 @@ class ReservoirData:
                                 pass
                     j += 1
         
-        # If no TSTEP found, use SPE9 default schedule
         if not tstep_values:
             logger.warning("No TSTEP found, using SPE9 default schedule")
-            # SPE9 schedule: 30*10, 6*10, 54*10 = 900 days
             tstep_values = [10.0]*30 + [10.0]*6 + [10.0]*54
         
-        # Calculate cumulative time points
         cumulative_time = np.cumsum(tstep_values)
         schedule_data['time_points'].extend(cumulative_time.tolist())
         schedule_data['total_days'] = cumulative_time[-1]
@@ -413,90 +368,72 @@ class ReservoirData:
         return schedule_data
     
     def _generate_realistic_profiles(self, schedule_data: Dict) -> None:
-        """
-        Generate realistic production and pressure profiles based on well controls
-        and reservoir properties.
-        """
         time_points = np.array(schedule_data['time_points'], dtype=np.float64)
-        total_days = schedule_data['total_days']
         
         for well_name, well in self.wells.items():
             n_points = len(time_points)
             
-            # Determine well type from name
             is_injector = 'INJE' in well_name.upper()
-            is_producer = 'PRODU' in well_name.upper() or not is_injector
             
             if is_injector:
-                # Injection well profile
-                # Constant injection rate with some operational variations
-                base_rate = -5000.0  # STB/day, negative for injection
+                base_rate = -5000.0
                 rates = np.full(n_points, base_rate, dtype=np.float64)
                 
-                # Add some operational noise
                 noise = np.random.normal(0, 200, n_points).astype(np.float64)
-                rates = rates + noise  # FIXED: Use explicit addition instead of +=
+                rates = rates + noise
                 
-                # Injection pressure profile
-                base_pressure = 4000.0  # psia
+                base_pressure = 4000.0
                 pressures = base_pressure + np.random.normal(0, 100, n_points)
                 pressures = pressures.astype(np.float64)
                 
             else:
-                # Production well profile using Arps decline curve
+                if self.grid_dimensions[0] > 0 and self.grid_dimensions[1] > 0 and 300 > 0:
+                    try:
+                        i_norm = well.coordinates[0] / (self.grid_dimensions[0] * 300)
+                        j_norm = well.coordinates[1] / (self.grid_dimensions[1] * 300)
+                    except ZeroDivisionError:
+                        i_norm = 0.5
+                        j_norm = 0.5
+                else:
+                    i_norm = 0.5
+                    j_norm = 0.5
                 
-                # Initial rate based on well location (higher for center wells)
-                i_norm = well.coordinates[0] / (self.grid_dimensions[0] * 300)
-                j_norm = well.coordinates[1] / (self.grid_dimensions[1] * 300)
-                
-                # Wells in center typically have better productivity
                 centrality = 1.0 - abs(i_norm - 0.5) - abs(j_norm - 0.5)
-                qi = 800.0 + centrality * 1200.0  # Initial rate 800-2000 STB/day
+                qi = 800.0 + centrality * 1200.0
                 
-                # Decline parameters based on reservoir quality
                 avg_poro = np.mean(self.porosity) if len(self.porosity) > 0 else 0.15
-                di = 0.0005 + (0.15 - avg_poro) * 0.01  # Decline rate
-                b = 0.8 + np.random.uniform(-0.2, 0.4)  # Decline exponent
+                di = 0.0005 + (0.15 - avg_poro) * 0.01
+                b = 0.8 + np.random.uniform(-0.2, 0.4)
                 
-                # Hyperbolic decline
-                rates = qi / (1 + b * di * time_points) ** (1/b)
+                safe_b = max(0.1, min(b, 1.9))
+                safe_di = max(1e-6, min(di, 1.0))
                 
-                # Add rate changes based on schedule
-                # SPE9 has rate change at day 300 (from 1500 to 100 STB/day)
-                # and back to 1500 at day 360
+                rates = qi / (1 + safe_b * safe_di * time_points) ** (1/safe_b)
+                
                 mask_300 = time_points >= 300
                 mask_360 = time_points >= 360
                 rates = np.where(mask_300 & ~mask_360, rates * (100/1500), rates)
                 
-                # Add realistic noise and operational variations
                 operational_noise = np.random.normal(0, qi * 0.05, n_points)
-                rates = rates + operational_noise  # FIXED: Use explicit addition
+                rates = rates + operational_noise
                 
-                # Ensure rates are positive
                 rates = np.maximum(0.0, rates)
                 
-                # Pressure profile (simplified)
-                # Initial reservoir pressure minus drawdown
-                drawdown_factor = rates / qi
+                drawdown_factor = rates / qi if qi > 0 else 0
                 pressures = self._initial_pressure - drawdown_factor * 1000
                 
-                # Minimum flowing bottomhole pressure
-                min_bhp = 1000.0  # psia
+                min_bhp = 1000.0
                 pressures = np.maximum(min_bhp, pressures)
                 
-                # Add some reservoir pressure support effects
                 if 'INJE' in self.wells:
-                    # Pressure support from injector
                     injection_support = 200.0 * (1 - np.exp(-time_points / 500))
-                    pressures = pressures + injection_support  # FIXED: Use explicit addition
+                    pressures = pressures + injection_support
             
-            # Smooth the profiles
             if n_points > 10:
                 from scipy.ndimage import gaussian_filter1d
                 rates = gaussian_filter1d(rates, sigma=2)
                 pressures = gaussian_filter1d(pressures, sigma=2)
             
-            # Ensure float64 type
             rates = rates.astype(np.float64)
             pressures = pressures.astype(np.float64)
             
@@ -509,10 +446,8 @@ class ReservoirData:
                         f"qf={rates[-1]:.0f} STB/day")
     
     def _parse_rock_fluid_properties(self, lines: List[str]) -> None:
-        """Parse rock and fluid properties from PVTW, ROCK, PVTO, PVDG sections."""
         self._fluid_properties = {}
         
-        # Parse PVTW (water properties)
         for i, line in enumerate(lines):
             if 'PVTW' in line and not line.strip().startswith('--'):
                 j = i + 1
@@ -533,7 +468,6 @@ class ReservoirData:
                                 pass
                     j += 1
         
-        # Parse ROCK
         for i, line in enumerate(lines):
             if 'ROCK' in line and not line.strip().startswith('--'):
                 j = i + 1
@@ -553,14 +487,10 @@ class ReservoirData:
                     j += 1
     
     def _create_synthetic_wells(self) -> None:
-        """Create synthetic wells if no wells were parsed from file."""
         logger.warning("No wells parsed from file, creating synthetic wells")
         
-        # SPE9 has 1 injector and 25 producers
         synthetic_wells = [
-            ('INJE1', 24, 25, -5000),  # Injector
-            
-            # Producers (sample of SPE9's 25 producers)
+            ('INJE1', 24, 25, -5000),
             ('PRODU2', 5, 1, 1500),
             ('PRODU3', 8, 2, 1500),
             ('PRODU4', 11, 3, 1500),
@@ -573,10 +503,9 @@ class ReservoirData:
         ]
         
         for name, i_loc, j_loc, base_rate in synthetic_wells:
-            # Coordinates
-            x = (i_loc - 0.5) * 300  # SPE9 DX=300ft
-            y = (j_loc - 0.5) * 300  # SPE9 DY=300ft
-            z = 9110.0  # Reference depth from SPE9
+            x = (i_loc - 0.5) * 300 if i_loc > 0 else 0
+            y = (j_loc - 0.5) * 300 if j_loc > 0 else 0
+            z = 9110.0
             
             self.wells[name] = WellData(
                 name=name,
@@ -584,86 +513,67 @@ class ReservoirData:
                 production_rates=np.array([]),
                 pressures=np.array([]),
                 coordinates=(x, y, z),
-                completion_zones=[2, 3, 4]  # Default SPE9 completions
+                completion_zones=[2, 3, 4]
             )
         
         logger.info(f"Created {len(self.wells)} synthetic wells")
     
     def create_sample_data(self, n_wells: int = 8, n_time_points: int = 365) -> None:
-        """
-        Create comprehensive sample data for testing and demonstration.
-        
-        Args:
-            n_wells: Number of wells to create
-            n_time_points: Number of time points (days)
-        """
-        np.random.seed(42)  # For reproducibility
+        np.random.seed(42)
         
         logger.info(f"Creating sample data: {n_wells} wells, {n_time_points} days")
         
-        # Clear existing data
         self.wells.clear()
         
-        # Set reasonable grid dimensions
         self.grid_dimensions = (24, 25, 15)
         
-        # Create porosity field
         n_cells = self.grid_dimensions[0] * self.grid_dimensions[1] * self.grid_dimensions[2]
         self.porosity = np.random.uniform(0.08, 0.18, n_cells)
         
-        # Create time points (daily for specified period)
         time_points = np.arange(0, n_time_points, dtype=np.float64)
         
-        # Create wells with realistic properties
         for i in range(n_wells):
             if i == 0:
-                # First well is an injector
                 well_name = "INJE1"
                 is_injector = True
             else:
                 well_name = f"PRODU{i:02d}"
                 is_injector = False
             
-            # Random location within reservoir bounds
             x = np.random.uniform(0, self.grid_dimensions[0] * 300)
             y = np.random.uniform(0, self.grid_dimensions[1] * 300)
-            z = 9000 + np.random.uniform(-500, 500)  # Around 9000ft depth
+            z = 9000 + np.random.uniform(-500, 500)
             
             if is_injector:
-                # Injection well profile
-                base_rate = -4000.0  # Negative for injection
+                base_rate = -4000.0
                 rates = base_rate + np.random.normal(0, 200, n_time_points)
                 pressures = 3800.0 + np.random.normal(0, 100, n_time_points)
-                completion_zones = [11, 12, 13, 14, 15]  # Lower zones for injection
+                completion_zones = [11, 12, 13, 14, 15]
             else:
-                # Production well with decline curve
                 qi = np.random.uniform(800, 2000)
                 di = np.random.uniform(0.0003, 0.001)
                 b = np.random.uniform(0.7, 1.3)
                 
-                # Hyperbolic decline
-                rates = qi / (1 + b * di * time_points) ** (1/b)
+                safe_b = max(0.1, min(b, 1.9))
+                safe_di = max(1e-6, min(di, 1.0))
                 
-                # Add monthly operational variations
+                rates = qi / (1 + safe_b * safe_di * time_points) ** (1/safe_b)
+                
                 monthly_cycle = 50 * np.sin(2 * np.pi * time_points / 30)
                 rates = rates + monthly_cycle
                 
-                # Add random noise
                 rates = rates + np.random.normal(0, qi * 0.05, n_time_points)
-                rates = np.maximum(0.0, rates)  # No negative rates
+                rates = np.maximum(0.0, rates)
                 
-                # Pressure profile
                 initial_pressure = 3600.0
-                drawdown = (rates / qi) * 800
+                drawdown = (rates / qi) * 800 if qi > 0 else 0
                 pressures = initial_pressure - drawdown
-                pressures = np.maximum(1200.0, pressures)  # Minimum flowing pressure
+                pressures = np.maximum(1200.0, pressures)
                 
-                # Random completion zones (typically upper zones)
                 n_zones = np.random.randint(3, 8)
                 start_zone = np.random.randint(1, 8)
                 completion_zones = list(range(start_zone, start_zone + n_zones))
             
-            # Create WellData object
             self.wells[well_name] = WellData(
                 name=well_name,
                 time_points=time_points,
@@ -673,7 +583,6 @@ class ReservoirData:
                 completion_zones=completion_zones
             )
         
-        # Set fluid properties
         self._initial_pressure = 3600.0
         self._oil_fvf = 1.12
         self._water_fvf = 1.0034
@@ -682,12 +591,6 @@ class ReservoirData:
         logger.info(f"Sample data created: {len(self.wells)} wells with {n_time_points} days each")
     
     def summary(self) -> Dict[str, Any]:
-        """
-        Generate comprehensive summary of the loaded data.
-        
-        Returns:
-            Dictionary with summary statistics
-        """
         total_wells = len(self.wells)
         
         if total_wells == 0:
@@ -703,7 +606,6 @@ class ReservoirData:
                 'well_summaries': []
             }
         
-        # Collect statistics from all wells
         all_rates = []
         all_pressures = []
         total_cumulative = 0
@@ -720,7 +622,6 @@ class ReservoirData:
             if len(well.pressures) > 0:
                 all_pressures.extend(well.pressures.tolist())
         
-        # Calculate overall statistics
         has_production = len(all_rates) > 0
         has_pressure = len(all_pressures) > 0
         
@@ -736,7 +637,6 @@ class ReservoirData:
             'mean': float(np.mean(all_pressures)) if has_pressure else 0
         }
         
-        # Determine time points (assume all wells have same time points)
         time_points_count = 0
         if self.wells:
             first_well = list(self.wells.values())[0]
@@ -760,12 +660,6 @@ class ReservoirData:
         }
     
     def get_well_dataframe(self) -> pd.DataFrame:
-        """
-        Convert well data to pandas DataFrame for analysis and visualization.
-        
-        Returns:
-            DataFrame with time series data for all wells
-        """
         data_frames = []
         
         for well_name, well in self.wells.items():
@@ -787,27 +681,16 @@ class ReservoirData:
             return pd.DataFrame()
     
     def export_to_csv(self, output_path: str) -> bool:
-        """
-        Export all data to CSV files.
-        
-        Args:
-            output_path: Directory where CSV files will be saved
-            
-        Returns:
-            bool: True if export successful
-        """
         try:
             import os
             os.makedirs(output_path, exist_ok=True)
             
-            # Export well data
             well_df = self.get_well_dataframe()
             if not well_df.empty:
                 well_file = os.path.join(output_path, 'well_data.csv')
                 well_df.to_csv(well_file, index=False)
                 logger.info(f"Exported well data to {well_file}")
             
-            # Export reservoir properties
             if len(self.porosity) > 0:
                 reservoir_data = {
                     'grid_dimensions': [self.grid_dimensions],
