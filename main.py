@@ -1,363 +1,371 @@
+# main.py
 import sys
 import os
-import logging
-from datetime import datetime
-import numpy as np
-from prettytable import PrettyTable
 import json
+import logging
+from typing import Dict, List, Any
+import warnings
+warnings.filterwarnings('ignore')
+
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from src.economics import ReservoirSimulator, EconomicParameters
+from src.data_loader import DataLoader
+from src.visualizer import Visualizer
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(f'simulation_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
-    ]
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-sys.path.insert(0, os.path.dirname(__file__))
-
-from src.data_loader import DataLoader
-from src.economics import ReservoirSimulator, EconomicParameters
-from src.visualizer import Visualizer
-
-class ReservoirSimulationProject:
+class AdvancedReservoirSimulationProject:
     def __init__(self):
         self.data_loader = DataLoader()
         self.visualizer = Visualizer()
-        self.results = []
-        self.parameters = EconomicParameters()
+        self.simulation_results = []
+        self.econ_params = None
         
-    def run(self):
-        self.display_header()
+    def configure_economic_parameters(self) -> EconomicParameters:
+        print("\n" + "="*50)
+        print("ECONOMIC PARAMETERS CONFIGURATION")
+        print("="*50)
         
         try:
-            datasets = self.select_data_source()
+            forecast_years = int(input("Forecast years [15]: ") or "15")
+            oil_price = float(input("Oil price (USD/bbl) [82.5]: ") or "82.5")
+            operating_cost = float(input("Operating cost (USD/bbl) [16.5]: ") or "16.5")
+            discount_rate = float(input("Discount rate (%) [9.5]: ") or "9.5") / 100
             
-            if not datasets:
-                logger.error("No datasets loaded")
-                return
+            print("\nAdvanced parameters (press Enter for defaults):")
+            capex_per_producer = float(input("CAPEX per producer ($M) [3.5]: ") or "3.5") * 1_000_000
+            fixed_annual_opex = float(input("Fixed annual OPEX ($M) [2.5]: ") or "2.5") * 1_000_000
             
-            self.configure_parameters()
+            self.econ_params = EconomicParameters(
+                forecast_years=forecast_years,
+                oil_price=oil_price,
+                opex_per_bbl=operating_cost,
+                discount_rate=discount_rate,
+                capex_per_producer=capex_per_producer,
+                fixed_opex=fixed_annual_opex
+            )
             
-            self.run_simulations(datasets)
+            logger.info(f"Parameters configured: {forecast_years}y forecast, ${oil_price}/bbl, {discount_rate*100:.1f}% DR")
+            return self.econ_params
             
-            self.display_comparison()
-            
-            self.generate_reports()
-            
-            self.display_summary()
-            
-        except KeyboardInterrupt:
-            print("\n\nSimulation interrupted by user")
-        except Exception as e:
-            logger.error(f"Project execution failed: {e}", exc_info=True)
+        except ValueError as e:
+            print(f"Invalid input: {e}. Using default parameters.")
+            return EconomicParameters()
     
-    def display_header(self):
-        print("=" * 80)
+    def load_google_drive_data(self) -> List[Dict]:
+        print("\nLoading SPE9 datasets from Google Drive...")
+        
+        dataset_ids = [
+            "13twFcFA35CKbI8neIzIt-D54dzDd1B-N",
+            "1n_auKzsDz5aHglQ4YvskjfHPK8ZuLBqC",
+            "1bdyUFKx-FKPy7YOlq-E9Y4nupcrhOoXi",
+            "1f0aJFS99ZBVkT8IXbKdZdVihbIZIpBwZ",
+            "1sxq7sd4GSL-chE362k8wTLA_arehaD5U",
+            "1ZwEswptUcexDn_kqm_q8qRcHYTl1WHq2"
+        ]
+        
+        datasets = []
+        for i, dataset_id in enumerate(dataset_ids, 1):
+            dataset = {
+                'id': dataset_id,
+                'name': f'SPE9_Dataset_{i}',
+                'path': f'downloaded_data/{dataset_id}.csv'
+            }
+            datasets.append(dataset)
+            
+            if not os.path.exists(dataset['path']):
+                print(f"Dataset {dataset_id} not found locally.")
+                return []
+        
+        return datasets
+    
+    def load_sample_data(self) -> List[Dict]:
+        print("\nGenerating synthetic reservoir data for testing...")
+        
+        datasets = []
+        for i in range(3):
+            dataset = {
+                'id': f'sample_data_{i+1}',
+                'name': f'Synthetic_Reservoir_{i+1}',
+                'type': 'synthetic'
+            }
+            datasets.append(dataset)
+        
+        return datasets
+    
+    def load_custom_file(self) -> List[Dict]:
+        file_path = input("\nEnter full path to data file: ").strip()
+        
+        if not os.path.exists(file_path):
+            print(f"File not found: {file_path}")
+            return []
+        
+        dataset = {
+            'id': os.path.basename(file_path).split('.')[0],
+            'name': os.path.basename(file_path),
+            'path': file_path
+        }
+        
+        return [dataset]
+    
+    def run_single_simulation(self, dataset: Dict) -> Dict:
+        print("\n" + "="*60)
+        print(f"DATASET: {dataset['id']}")
+        print("="*60)
+        
+        try:
+            if dataset.get('type') == 'synthetic':
+                self.data_loader.load_spe9_data("")
+                reservoir_data = self.data_loader.get_reservoir_data()
+            else:
+                if not self.data_loader.load_spe9_data(dataset['path']):
+                    raise ValueError(f"Failed to load data from {dataset['path']}")
+                reservoir_data = self.data_loader.get_reservoir_data()
+            
+            simulator = ReservoirSimulator(reservoir_data, self.econ_params)
+            results = simulator.run_comprehensive_analysis()
+            
+            if 'error' in results:
+                raise ValueError(results['error'])
+            
+            wells_analyzed = len(results.get('decline_analysis', {}))
+            
+            print(f"\n  Wells analyzed: {wells_analyzed}")
+            print(f"  Forecast period: {self.econ_params.forecast_years} years")
+            print(f"\n  ECONOMIC RESULTS:")
+            print(f"    NPV: ${results['economic_evaluation']['npv']/1_000_000:+.2f}M")
+            print(f"    IRR: {results['economic_evaluation']['irr']:.1f}%")
+            print(f"    ROI: {results['economic_evaluation']['roi']:.1f}%")
+            print(f"    Payback: {results['economic_evaluation']['payback_period']:.1f} years")
+            print(f"    Break-even: ${results['economic_evaluation']['break_even_price']:.1f}/bbl")
+            
+            dataset_id_short = dataset['id'][:20]
+            self.visualizer.create_dashboard(results, dataset_id_short)
+            self.visualizer.plot_production_forecast(results, dataset_id_short)
+            self.visualizer.plot_economic_results(results, dataset_id_short)
+            
+            print(f"  Visualizations generated for {dataset_id_short}")
+            
+            return {
+                'dataset_id': dataset['id'],
+                'dataset_name': dataset['name'],
+                'results': results,
+                'success': True
+            }
+            
+        except Exception as e:
+            logger.error(f"Simulation failed for {dataset['id']}: {e}")
+            print(f"  ERROR: {e}")
+            
+            return {
+                'dataset_id': dataset['id'],
+                'dataset_name': dataset['name'],
+                'error': str(e),
+                'success': False
+            }
+    
+    def generate_comparison_table(self, simulation_results: List[Dict]):
+        print("\n" + "="*80)
+        print("DATASET COMPARISON")
+        print("="*80)
+        
+        table_data = []
+        for result in simulation_results:
+            if result['success']:
+                results = result['results']
+                econ = results['economic_evaluation']
+                wells = len(results.get('decline_analysis', {}))
+                eur = results['production_forecast'].get('total_eur', 0) / 1_000_000
+                
+                table_data.append({
+                    'dataset': result['dataset_id'][:20],
+                    'wells': wells,
+                    'npv': econ['npv'] / 1_000_000,
+                    'irr': econ['irr'],
+                    'roi': econ['roi'],
+                    'payback': econ['payback_period'],
+                    'eur': eur,
+                    'capex': econ['capex'] / 1_000_000
+                })
+            else:
+                table_data.append({
+                    'dataset': result['dataset_id'][:20],
+                    'wells': 0,
+                    'npv': 0,
+                    'irr': 0,
+                    'roi': 0,
+                    'payback': '>20',
+                    'eur': 0,
+                    'capex': 0
+                })
+        
+        print("+----------------------+-------+----------+---------+---------+-------------+-------------+------------+")
+        print("| Dataset              | Wells | NPV ($M) | IRR (%) | ROI (%) | Payback (y) | EUR (MMbbl) | CAPEX ($M) |")
+        print("+----------------------+-------+----------+---------+---------+-------------+-------------+------------+")
+        
+        for row in table_data:
+            dataset = row['dataset'].ljust(20)
+            wells = str(row['wells']).rjust(5)
+            npv = f"{row['npv']:+.2f}".rjust(8)
+            irr = f"{row['irr']:.1f}".rjust(7)
+            roi = f"{row['roi']:.1f}".rjust(7)
+            payback = str(row['payback']).rjust(11)
+            eur = f"{row['eur']:.1f}".rjust(11)
+            capex = f"{row['capex']:.1f}".rjust(10)
+            
+            print(f"| {dataset} | {wells} | {npv} | {irr} | {roi} | {payback} | {eur} | {capex} |")
+        
+        print("+----------------------+-------+----------+---------+---------+-------------+-------------+------------+")
+        
+        return table_data
+    
+    def generate_project_summary(self, simulation_results: List[Dict]):
+        successful = [r for r in simulation_results if r['success']]
+        profitable = [r for r in successful if r['results']['economic_evaluation']['npv'] > 0]
+        
+        avg_npv = np.mean([r['results']['economic_evaluation']['npv'] for r in successful]) / 1_000_000 if successful else 0
+        avg_irr = np.mean([r['results']['economic_evaluation']['irr'] for r in successful]) if successful else 0
+        avg_roi = np.mean([r['results']['economic_evaluation']['roi'] for r in successful]) if successful else 0
+        
+        best_project = None
+        worst_project = None
+        
+        if profitable:
+            best_project = max(profitable, key=lambda x: x['results']['economic_evaluation']['npv'])
+            worst_project = min(profitable, key=lambda x: x['results']['economic_evaluation']['npv'])
+        elif successful:
+            best_project = max(successful, key=lambda x: x['results']['economic_evaluation']['npv'])
+            worst_project = min(successful, key=lambda x: x['results']['economic_evaluation']['npv'])
+        
+        print("\n" + "="*80)
+        print("PROJECT SUMMARY")
+        print("="*80)
+        print(f"  Total simulations: {len(simulation_results)}")
+        print(f"  Successful: {len(successful)}")
+        print(f"  Profitable projects: {len(profitable)} ({len(profitable)/len(successful)*100 if successful else 0:.0f}%)")
+        print(f"  Average NPV: ${avg_npv:+.2f}M")
+        print(f"  Average IRR: {avg_irr:.1f}%")
+        print(f"  Average ROI: {avg_roi:.1f}%")
+        
+        if best_project:
+            print(f"\n  BEST PROJECT: {best_project['dataset_id'][:20]}")
+            print(f"    NPV: ${best_project['results']['economic_evaluation']['npv']/1_000_000:+.2f}M")
+            print(f"    IRR: {best_project['results']['economic_evaluation']['irr']:.1f}%")
+        
+        if worst_project and worst_project != best_project:
+            print(f"\n  WORST PROJECT: {worst_project['dataset_id'][:20]}")
+            print(f"    NPV: ${worst_project['results']['economic_evaluation']['npv']/1_000_000:+.2f}M")
+            print(f"    IRR: {worst_project['results']['economic_evaluation']['irr']:.1f}%")
+    
+    def save_comprehensive_report(self, simulation_results: List[Dict]):
+        import datetime
+        
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_filename = f"simulation_report_{timestamp}.json"
+        
+        report_data = {
+            'timestamp': timestamp,
+            'economic_parameters': {
+                'forecast_years': self.econ_params.forecast_years,
+                'oil_price': self.econ_params.oil_price,
+                'discount_rate': self.econ_params.discount_rate,
+                'opex_per_bbl': self.econ_params.opex_per_bbl
+            },
+            'simulations': []
+        }
+        
+        for result in simulation_results:
+            sim_data = {
+                'dataset_id': result['dataset_id'],
+                'dataset_name': result['dataset_name'],
+                'success': result['success']
+            }
+            
+            if result['success']:
+                results = result['results']
+                sim_data.update({
+                    'wells_analyzed': len(results.get('decline_analysis', {})),
+                    'npv': results['economic_evaluation']['npv'],
+                    'irr': results['economic_evaluation']['irr'],
+                    'roi': results['economic_evaluation']['roi'],
+                    'payback_period': results['economic_evaluation']['payback_period'],
+                    'eur': results['production_forecast'].get('total_eur', 0)
+                })
+            else:
+                sim_data['error'] = result.get('error', 'Unknown error')
+            
+            report_data['simulations'].append(sim_data)
+        
+        with open(report_filename, 'w') as f:
+            json.dump(report_data, f, indent=2, default=str)
+        
+        print(f"\n✓ Comprehensive report saved to: {report_filename}")
+        return report_filename
+    
+    def run(self):
+        print("="*80)
         print("ADVANCED RESERVOIR SIMULATION PROJECT - PhD LEVEL")
-        print("=" * 80)
+        print("="*80)
         print("\nComprehensive reservoir characterization, decline analysis,")
         print("production forecasting, and economic evaluation system")
-        print("=" * 80)
-    
-    def select_data_source(self):
-        print("\n" + "=" * 50)
+        print("="*80)
+        
+        print("\n" + "="*50)
         print("DATA SOURCE SELECTION")
-        print("=" * 50)
+        print("="*50)
         print("1. Google Drive - SPE9 Benchmark Datasets (6 datasets)")
         print("2. Sample Data - Synthetic reservoir for testing")
         print("3. Custom File - Load from local file")
         
-        choice = input("\nSelect option (1-3): ").strip()
-        
-        if choice == "1":
-            logger.info("Loading SPE9 datasets from Google Drive")
-            return self.data_loader.load_from_google_drive()
-        elif choice == "2":
-            logger.info("Loading sample data")
-            return self.data_loader.load_sample_data()
-        elif choice == "3":
-            filepath = input("Enter file path: ").strip()
-            return self.load_custom_file(filepath)
-        else:
-            print("Invalid choice, using sample data")
-            return self.data_loader.load_sample_data()
-    
-    def load_custom_file(self, filepath):
-        return {'custom_file': {'wells': {}, 'grid': {}}}
-    
-    def configure_parameters(self):
-        print("\n" + "=" * 50)
-        print("ECONOMIC PARAMETERS CONFIGURATION")
-        print("=" * 50)
-        
-        try:
-            self.parameters.forecast_years = int(
-                input(f"Forecast years [{self.parameters.forecast_years}]: ") 
-                or str(self.parameters.forecast_years)
-            )
-            
-            self.parameters.oil_price = float(
-                input(f"Oil price (USD/bbl) [{self.parameters.oil_price}]: ") 
-                or str(self.parameters.oil_price)
-            )
-            
-            self.parameters.opex_per_bbl = float(
-                input(f"Operating cost (USD/bbl) [{self.parameters.opex_per_bbl}]: ") 
-                or str(self.parameters.opex_per_bbl)
-            )
-            
-            self.parameters.discount_rate = float(
-                input(f"Discount rate (%) [{self.parameters.discount_rate*100:.1f}]: ") 
-                or str(self.parameters.discount_rate * 100)
-            ) / 100
-            
-            print("\nAdvanced parameters (press Enter for defaults):")
-            
-            self.parameters.capex_per_producer = float(
-                input(f"CAPEX per producer ($M) [{self.parameters.capex_per_producer/1e6:.1f}]: ") 
-                or str(self.parameters.capex_per_producer / 1e6)
-            ) * 1e6
-            
-            self.parameters.fixed_opex = float(
-                input(f"Fixed annual OPEX ($M) [{self.parameters.fixed_opex/1e6:.1f}]: ") 
-                or str(self.parameters.fixed_opex / 1e6)
-            ) * 1e6
-            
-            logger.info(f"Parameters configured: {self.parameters.forecast_years}y forecast, "
-                       f"${self.parameters.oil_price}/bbl, {self.parameters.discount_rate*100:.1f}% DR")
-            
-        except ValueError as e:
-            print(f"Invalid input: {e}. Using default parameters.")
-            logger.warning(f"Parameter configuration error: {e}")
-    
-    def run_simulations(self, datasets):
-        print(f"\n{'='*80}")
-        print(f"RUNNING SIMULATIONS - {len(datasets)} DATASETS")
-        print(f"{'='*80}")
-        
-        for dataset_id, data in datasets.items():
-            print(f"\n{'='*60}")
-            print(f"DATASET: {dataset_id[:40]}")
-            print(f"{'='*60}")
-            
+        while True:
             try:
-                simulator = ReservoirSimulator(data, self.parameters)
-                results = simulator.run_comprehensive_analysis()
-                
-                self.display_dataset_results(dataset_id, results)
-                
-                self.results.append({
-                    'dataset_id': dataset_id,
-                    'results': results,
-                    'summary': self.extract_summary(results)
-                })
-                
-                self.generate_visualizations(dataset_id, results)
-                
-            except Exception as e:
-                logger.error(f"Simulation failed for {dataset_id}: {e}")
-                print(f"  ERROR: {e}")
-    
-    def display_dataset_results(self, dataset_id, results):
-        econ = results.get('economic_evaluation', {})
-        prod = results.get('production_forecast', {})
-        reservoir = results.get('reservoir_properties', {})
+                option = input("\nSelect option (1-3): ").strip()
+                if option in ['1', '2', '3']:
+                    break
+                print("Invalid option. Please enter 1, 2, or 3.")
+            except KeyboardInterrupt:
+                print("\n\nSimulation cancelled.")
+                return
         
-        wells = len(results.get('decline_analysis', {}))
-        
-        print(f"\n  Wells analyzed: {wells}")
-        print(f"  Forecast period: {self.parameters.forecast_years} years")
-        
-        if reservoir.get('ooip', 0) > 0:
-            print(f"  OOIP: {reservoir['ooip']/1e6:,.1f} MMbbl")
-            print(f"  Recovery factor: {reservoir.get('recovery_factor', 0)*100:.1f}%")
-        
-        print(f"\n  ECONOMIC RESULTS:")
-        print(f"    NPV: ${econ.get('npv', 0)/1e6:+,.2f}M")
-        print(f"    IRR: {econ.get('irr', 0):.1f}%")
-        print(f"    ROI: {econ.get('roi', 0):.1f}%")
-        
-        payback = econ.get('payback_period', float('inf'))
-        if payback < 99:
-            print(f"    Payback: {payback:.1f} years")
+        if option == '1':
+            datasets = self.load_google_drive_data()
+        elif option == '2':
+            datasets = self.load_sample_data()
         else:
-            print(f"    Payback: >{self.parameters.forecast_years} years")
+            datasets = self.load_custom_file()
         
-        if 'total_eur' in prod:
-            print(f"    EUR: {prod['total_eur']/1e6:,.1f} MMbbl")
-        
-        print(f"    Break-even: ${econ.get('break_even_price', 0):.1f}/bbl")
-    
-    def extract_summary(self, results):
-        econ = results.get('economic_evaluation', {})
-        prod = results.get('production_forecast', {})
-        
-        return {
-            'npv': econ.get('npv', 0),
-            'irr': econ.get('irr', 0),
-            'roi': econ.get('roi', 0),
-            'payback': econ.get('payback_period', float('inf')),
-            'eur': prod.get('total_eur', 0),
-            'capex': econ.get('capex', 0),
-            'wells': len(results.get('decline_analysis', {}))
-        }
-    
-    def generate_visualizations(self, dataset_id, results):
-        try:
-            dashboard = self.visualizer.create_comprehensive_dashboard(results, dataset_id)
-            self.visualizer.save_dashboard(dashboard, f"{dataset_id[:20]}_dashboard.html")
-            
-            prod_fig = self.visualizer.plot_production_profiles(
-                results.get('production_forecast', {})
-            )
-            self.visualizer.save_matplotlib_figure(
-                prod_fig, f"{dataset_id[:20]}_production.png"
-            )
-            
-            econ_fig = self.visualizer.plot_economic_results(
-                results.get('economic_evaluation', {})
-            )
-            self.visualizer.save_matplotlib_figure(
-                econ_fig, f"{dataset_id[:20]}_economics.png"
-            )
-            
-            print(f"  Visualizations generated for {dataset_id[:20]}")
-            
-        except Exception as e:
-            logger.warning(f"Visualization generation failed: {e}")
-    
-    def display_comparison(self):
-        if not self.results:
+        if not datasets:
+            print("No datasets available. Exiting.")
             return
         
-        print(f"\n{'='*80}")
-        print("DATASET COMPARISON")
-        print(f"{'='*80}")
+        self.econ_params = self.configure_economic_parameters()
         
-        table = PrettyTable()
-        table.field_names = [
-            "Dataset", "Wells", "NPV ($M)", "IRR (%)", "ROI (%)", 
-            "Payback (y)", "EUR (MMbbl)", "CAPEX ($M)"
-        ]
+        print("\n" + "="*80)
+        print(f"RUNNING SIMULATIONS - {len(datasets)} DATASETS")
+        print("="*80)
         
-        table.align["Dataset"] = "l"
-        table.align["Wells"] = "r"
-        table.align["NPV ($M)"] = "r"
-        table.align["IRR (%)"] = "r"
-        table.align["ROI (%)"] = "r"
-        table.align["Payback (y)"] = "r"
-        table.align["EUR (MMbbl)"] = "r"
-        table.align["CAPEX ($M)"] = "r"
+        self.simulation_results = []
+        for dataset in datasets:
+            result = self.run_single_simulation(dataset)
+            self.simulation_results.append(result)
         
-        for result in self.results:
-            summary = result['summary']
-            
-            npv_str = f"{summary['npv']/1e6:+,.2f}"
-            irr_str = f"{summary['irr']:.1f}"
-            roi_str = f"{summary['roi']:.1f}"
-            payback_str = f"{summary['payback']:.1f}" if summary['payback'] < 99 else ">20"
-            eur_str = f"{summary['eur']/1e6:,.1f}"
-            capex_str = f"{summary['capex']/1e6:.1f}"
-            
-            table.add_row([
-                result['dataset_id'][:20],
-                summary['wells'],
-                npv_str,
-                irr_str,
-                roi_str,
-                payback_str,
-                eur_str,
-                capex_str
-            ])
+        self.generate_comparison_table(self.simulation_results)
         
-        print(table)
-    
-    def generate_reports(self):
-        if not self.results:
-            return
+        report_file = self.save_comprehensive_report(self.simulation_results)
         
-        report_data = {
-            'timestamp': datetime.now().isoformat(),
-            'parameters': self.parameters.__dict__,
-            'datasets': []
-        }
+        self.generate_project_summary(self.simulation_results)
         
-        for result in self.results:
-            dataset_report = {
-                'id': result['dataset_id'],
-                'summary': result['summary'],
-                'metrics': self.calculate_metrics(result['results'])
-            }
-            report_data['datasets'].append(dataset_report)
-        
-        filename = f"simulation_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(filename, 'w') as f:
-            json.dump(report_data, f, indent=2, default=str)
-        
-        print(f"\n✓ Comprehensive report saved to: {filename}")
-    
-    def calculate_metrics(self, results):
-        econ = results.get('economic_evaluation', {})
-        prod = results.get('production_forecast', {})
-        kpis = results.get('key_performance_indicators', {})
-        
-        return {
-            'npv_per_well': econ.get('npv', 0) / max(len(results.get('decline_analysis', {})), 1),
-            'eur_per_well': prod.get('total_eur', 0) / max(len(results.get('decline_analysis', {})), 1),
-            'capex_per_bbl': econ.get('capex', 0) / prod.get('total_eur', 1),
-            'opex_per_bbl': econ.get('opex', 0) / prod.get('total_eur', 1),
-            'netback_per_bbl': (econ.get('revenue', 0) - econ.get('opex', 0)) / prod.get('total_eur', 1),
-            **kpis
-        }
-    
-    def display_summary(self):
-        if not self.results:
-            return
-        
-        successful = [r for r in self.results if 'error' not in r]
-        if not successful:
-            return
-        
-        npvs = [r['summary']['npv'] for r in successful]
-        irrs = [r['summary']['irr'] for r in successful]
-        rois = [r['summary']['roi'] for r in successful]
-        
-        profitable = sum(1 for npv in npvs if npv > 0)
-        avg_npv = np.mean(npvs) / 1e6
-        avg_irr = np.mean(irrs)
-        avg_roi = np.mean(rois)
-        
-        best_idx = np.argmax(npvs)
-        worst_idx = np.argmin(npvs)
-        
-        print(f"\n{'='*80}")
-        print("PROJECT SUMMARY")
-        print(f"{'='*80}")
-        print(f"  Total simulations: {len(self.results)}")
-        print(f"  Successful: {len(successful)}")
-        print(f"  Profitable projects: {profitable} ({profitable/len(successful)*100:.0f}%)")
-        print(f"  Average NPV: ${avg_npv:+,.2f}M")
-        print(f"  Average IRR: {avg_irr:.1f}%")
-        print(f"  Average ROI: {avg_roi:.1f}%")
-        
-        if len(successful) >= 2:
-            print(f"\n  BEST PROJECT: {successful[best_idx]['dataset_id'][:20]}")
-            print(f"    NPV: ${successful[best_idx]['summary']['npv']/1e6:+,.2f}M")
-            print(f"    IRR: {successful[best_idx]['summary']['irr']:.1f}%")
-            
-            print(f"\n  WORST PROJECT: {successful[worst_idx]['dataset_id'][:20]}")
-            print(f"    NPV: ${successful[worst_idx]['summary']['npv']/1e6:+,.2f}M")
-            print(f"    IRR: {successful[worst_idx]['summary']['irr']:.1f}%")
-        
-        print(f"\n{'='*80}")
+        print("\n" + "="*80)
         print("SIMULATION COMPLETED SUCCESSFULLY")
-        print(f"{'='*80}")
+        print("="*80)
 
 def main():
-    project = ReservoirSimulationProject()
+    project = AdvancedReservoirSimulationProject()
     project.run()
 
 if __name__ == "__main__":
