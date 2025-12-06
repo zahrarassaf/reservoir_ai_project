@@ -28,7 +28,7 @@ class SimulationParameters:
     discount_rate: float = 0.12
     compressibility: float = 1e-5
     abandonment_pressure: float = 500.0
-    initial_investment: float = 1000000.0
+    initial_investment: float = 50_000_000.0
     
     def to_dict(self):
         return asdict(self)
@@ -399,6 +399,8 @@ class ReservoirSimulator:
         
         cash_flows[0] -= self.params.initial_investment
         
+        cash_flows = np.clip(cash_flows, -1e9, 1e9)
+        
         npv = 0.0
         for i in range(len(time)):
             if i == 0:
@@ -406,6 +408,8 @@ class ReservoirSimulator:
             else:
                 discount_factor = 1.0 / ((1.0 + discount_rate) ** (time[i] / 365))
             npv += cash_flows[i] * discount_factor
+        
+        npv = np.clip(npv, -1e9, 1e9)
         
         cumulative_cf = np.cumsum(cash_flows)
         
@@ -421,6 +425,15 @@ class ReservoirSimulator:
         if self.params.initial_investment > 0:
             total_profit = np.sum(cash_flows)
             roi = (total_profit / self.params.initial_investment) * 100
+            roi = np.clip(roi, -1000, 1000)
+        
+        total_revenue = float(np.sum(daily_revenue * dt))
+        total_opex = float(np.sum(daily_opex * dt))
+        total_cash_flow = float(np.sum(cash_flows))
+        
+        profit_margin = 0.0
+        if total_revenue > 0:
+            profit_margin = ((total_revenue - total_opex) / total_revenue) * 100
         
         results = {
             'npv': float(npv),
@@ -438,13 +451,10 @@ class ReservoirSimulator:
                 'initial_investment': self.params.initial_investment
             },
             'summary': {
-                'total_revenue': float(np.sum(daily_revenue * dt)),
-                'total_opex': float(np.sum(daily_opex * dt)),
-                'total_cash_flow': float(np.sum(cash_flows)),
-                'profit_margin': float(
-                    (np.sum(daily_revenue * dt) - np.sum(daily_opex * dt)) / 
-                    np.sum(daily_revenue * dt) * 100
-                ) if np.sum(daily_revenue * dt) > 0 else 0
+                'total_revenue': total_revenue,
+                'total_opex': total_opex,
+                'total_cash_flow': total_cash_flow,
+                'profit_margin': profit_margin
             }
         }
         
@@ -468,13 +478,18 @@ class ReservoirSimulator:
             npv_at_1 = npv_func(1)
             
             if npv_at_0 * npv_at_1 < 0:
-                irr = optimize.brentq(npv_func, 0, 1, maxiter=1000)
-            elif npv_at_0 > 0 and npv_at_1 > 0:
+                try:
+                    irr = optimize.brentq(npv_func, 0, 1, maxiter=1000)
+                except:
+                    irr = 0.0
+            elif npv_at_0 > 0:
                 irr = 0.5
             else:
                 irr = 0.0
-                
-            return max(0, irr)
+            
+            irr = np.clip(irr, 0.0, 2.0)
+            
+            return irr
             
         except Exception as e:
             logger.warning(f"IRR calculation failed: {e}")
@@ -484,6 +499,7 @@ class ReservoirSimulator:
         logger.info("Performing sensitivity analysis")
         
         base_npv = self.results.get('economic_analysis', {}).get('npv', 1e6)
+        base_npv = np.clip(base_npv, -1e9, 1e9)
         
         parameters = {
             'oil_price': [60, 70, 75, 80, 90],
@@ -509,9 +525,12 @@ class ReservoirSimulator:
                 else:
                     npv_adj = base_npv
                 
+                npv_adj = np.clip(npv_adj, -1e9, 1e9)
                 npv_values.append(npv_adj)
             
-            sensitivity_index = (max(npv_values) - min(npv_values)) / base_npv if base_npv != 0 else 0
+            sensitivity_index = 0
+            if base_npv != 0:
+                sensitivity_index = (max(npv_values) - min(npv_values)) / abs(base_npv)
             
             sensitivity_results[param_name] = {
                 'values': values,
@@ -716,18 +735,18 @@ class ReservoirSimulator:
         report += "=" * 60 + "\n\n"
         
         if production and 'statistics' in production:
+            stats = production['statistics']
             report += "1. PRODUCTION FORECAST\n"
             report += "-" * 40 + "\n"
-            stats = production['statistics']
             report += f"Peak Production: {stats.get('peak_production', 0):.0f} bbl/day\n"
             report += f"Final Production: {stats.get('final_production', 0):.0f} bbl/day\n"
             report += f"Total Cumulative: {stats.get('total_cumulative', 0):,.0f} bbl\n"
             report += f"Forecast Period: {stats.get('forecast_years', 0)} years\n\n"
         
         if pressure and 'statistics' in pressure:
+            stats = pressure['statistics']
             report += "2. PRESSURE PROFILE\n"
             report += "-" * 40 + "\n"
-            stats = pressure['statistics']
             report += f"Initial Pressure: {stats.get('initial_pressure', 0):.0f} psi\n"
             report += f"Final Pressure: {stats.get('final_pressure', 0):.0f} psi\n"
             report += f"Pressure Drop: {stats.get('pressure_drop', 0):.0f} psi\n"
@@ -744,7 +763,7 @@ class ReservoirSimulator:
         if economics:
             report += "4. ECONOMIC ANALYSIS\n"
             report += "-" * 40 + "\n"
-            report += f"NPV: ${economics.get('npv', 0)/1000:.1f}K\n"
+            report += f"NPV: ${economics.get('npv', 0)/1e6:.2f}M\n"
             report += f"IRR: {economics.get('irr', 0)*100:.1f}%\n"
             report += f"ROI: {economics.get('roi', 0):.1f}%\n"
             payback = economics.get('payback_period')
@@ -753,8 +772,8 @@ class ReservoirSimulator:
             
             if 'summary' in economics:
                 summary = economics['summary']
-                report += f"Total Revenue: ${summary.get('total_revenue', 0)/1000:.1f}K\n"
-                report += f"Total OPEX: ${summary.get('total_opex', 0)/1000:.1f}K\n"
+                report += f"Total Revenue: ${summary.get('total_revenue', 0)/1e6:.2f}M\n"
+                report += f"Total OPEX: ${summary.get('total_opex', 0)/1e6:.2f}M\n"
                 report += f"Profit Margin: {summary.get('profit_margin', 0):.1f}%\n"
             report += "\n"
         
@@ -763,7 +782,7 @@ class ReservoirSimulator:
         report += f"Oil Price: ${self.params.oil_price}/bbl\n"
         report += f"Operating Cost: ${self.params.operating_cost}/bbl\n"
         report += f"Discount Rate: {self.params.discount_rate*100:.1f}%\n"
-        report += f"Initial Investment: ${self.params.initial_investment/1000:.0f}K\n\n"
+        report += f"Initial Investment: ${self.params.initial_investment/1e6:.1f}M\n\n"
         
         report += "=" * 60 + "\n"
         report += f"Report generated: {pd.Timestamp.now()}\n"
