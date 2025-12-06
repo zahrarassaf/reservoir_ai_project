@@ -4,10 +4,8 @@ from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
 import logging
 from scipy import integrate, interpolate, optimize
-from scipy.sparse import diags
 import matplotlib.pyplot as plt
 import warnings
-from numpy_financial import irr as npf_irr, npv as npf_npv
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
@@ -652,7 +650,7 @@ class ReservoirSimulator:
         return npv
     
     def _calculate_irr(self, cash_flows: List[float]) -> float:
-        """Calculate Internal Rate of Return."""
+        """Calculate Internal Rate of Return using Newton-Raphson method."""
         # Filter out trailing zeros
         cash_flows_array = np.array(cash_flows)
         non_zero_idx = np.where(cash_flows_array != 0)[0]
@@ -675,18 +673,54 @@ class ReservoirSimulator:
             return 0.0
         
         try:
-            # Use numpy's IRR function with bounds
-            irr_value = npf_irr(trimmed_cash_flows)
+            # Newton-Raphson method for IRR
+            def npv_func(rate):
+                npv = 0.0
+                for t, cf in enumerate(trimmed_cash_flows):
+                    npv += cf / ((1 + rate) ** t)
+                return npv
             
-            # Validate IRR result
-            if irr_value is None or np.isnan(irr_value) or np.isinf(irr_value):
+            def npv_derivative(rate):
+                deriv = 0.0
+                for t, cf in enumerate(trimmed_cash_flows):
+                    if t > 0:
+                        deriv -= t * cf / ((1 + rate) ** (t + 1))
+                return deriv
+            
+            # Initial guess
+            rate_guess = 0.1  # 10% initial guess
+            
+            # Newton-Raphson iteration
+            max_iter = 50
+            tolerance = 1e-8
+            
+            for i in range(max_iter):
+                f_val = npv_func(rate_guess)
+                f_deriv = npv_derivative(rate_guess)
+                
+                if abs(f_deriv) < 1e-12:
+                    break
+                
+                rate_new = rate_guess - f_val / f_deriv
+                
+                # Check convergence
+                if abs(rate_new - rate_guess) < tolerance:
+                    rate_guess = rate_new
+                    break
+                
+                # Ensure rate stays within reasonable bounds
+                if rate_new < -0.99:
+                    rate_new = -0.9
+                elif rate_new > 10:
+                    rate_new = 1.0
+                
+                rate_guess = rate_new
+            
+            # Validate result
+            if abs(rate_guess) > 10 or rate_guess <= -0.99:
                 return 0.0
             
-            # IRR should be reasonable (between -0.99 and 10)
-            if irr_value <= -0.99 or irr_value > 10:
-                return 0.0
-            
-            return irr_value
+            return rate_guess
             
         except Exception as e:
             logger.warning(f"IRR calculation failed: {e}")
@@ -724,70 +758,3 @@ class ReservoirSimulator:
             })
         
         return summary
-
-# Example usage function
-def run_example_simulation():
-    """Example function to demonstrate usage."""
-    # Create sample data
-    class WellData:
-        def __init__(self, name, time_points, production_rates):
-            self.name = name
-            self.time_points = time_points
-            self.production_rates = production_rates
-    
-    class DataContainer:
-        def __init__(self):
-            self.wells = {}
-    
-    # Create sample wells
-    data = DataContainer()
-    
-    # Create 5 sample wells with synthetic data
-    np.random.seed(42)
-    for i in range(1, 6):
-        time_points = np.arange(0, 1000, 30)  # 30-day intervals
-        qi = np.random.uniform(500, 1500)
-        di = np.random.uniform(0.0002, 0.0005)
-        b = np.random.uniform(0.5, 1.5)
-        
-        # Generate production using hyperbolic decline
-        production_rates = qi / (1 + b * di * time_points) ** (1/b)
-        
-        # Add some noise
-        production_rates *= np.random.normal(1, 0.1, len(production_rates))
-        production_rates = np.maximum(production_rates, 0)
-        
-        well = WellData(f"PRODU{i}", time_points, production_rates)
-        data.wells[f"PRODU{i}"] = well
-    
-    # Set simulation parameters
-    params = SimulationParameters(
-        forecast_years=3,
-        oil_price=75.0,
-        operating_cost=18.0,
-        discount_rate=0.12
-    )
-    
-    # Run simulation
-    simulator = ReservoirSimulator(data, params)
-    results = simulator.run_comprehensive_simulation()
-    
-    # Print results
-    print("\n=== SIMULATION RESULTS ===")
-    print(f"Number of wells: {len(data.wells)}")
-    
-    economic = results.get('economic_analysis', {})
-    print(f"\nEconomic Analysis:")
-    print(f"  NPV: ${economic.get('npv', 0):.2f}M")
-    print(f"  IRR: {economic.get('irr', 0):.1f}%")
-    print(f"  ROI: {economic.get('roi', 0):.1f}%")
-    print(f"  Payback: {economic.get('payback_period_years', 0):.1f} years")
-    
-    return results
-
-if __name__ == "__main__":
-    # Configure logging
-    logging.basicConfig(level=logging.INFO)
-    
-    # Run example
-    results = run_example_simulation()
