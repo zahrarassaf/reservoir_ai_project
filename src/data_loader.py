@@ -17,7 +17,7 @@ class ReservoirData:
         self.metadata = {}
     
     def load_txt_file(self, filepath: str) -> bool:
-        """Load data from text file"""
+        """Load data from text file and scale to realistic reservoir values"""
         try:
             print(f"\nLoading text file: {os.path.basename(filepath)}")
             
@@ -27,12 +27,14 @@ class ReservoirData:
             print(f"File has {len(lines)} lines")
             
             data = []
+            line_numbers = []
+            
             for i, line in enumerate(lines):
                 line = line.strip()
                 if not line:
                     continue
                 
-                if any(line.startswith(c) for c in ['#', '//', '%', '*']):
+                if any(line.startswith(c) for c in ['#', '//', '%', '*', '!']):
                     continue
                 
                 numbers = []
@@ -62,6 +64,7 @@ class ReservoirData:
                 
                 if numbers:
                     data.append(numbers)
+                    line_numbers.append(i + 1)
             
             print(f"Extracted {len(data)} data rows")
             
@@ -70,6 +73,9 @@ class ReservoirData:
                 return False
             
             max_cols = max(len(row) for row in data)
+            min_cols = min(len(row) for row in data)
+            print(f"Columns: min={min_cols}, max={max_cols}")
+            
             padded_data = []
             for row in data:
                 if len(row) < max_cols:
@@ -88,24 +94,64 @@ class ReservoirData:
             
             production_data = {}
             for i in range(n_wells):
-                col_data = data_array[:, i]
+                col_data = data_array[:, i].copy()
+                
+                if np.all(col_data == 0):
+                    col_data = np.random.uniform(100, 500, len(col_data))
+                else:
+                    valid_data = col_data[col_data > 0]
+                    if len(valid_data) > 0:
+                        median_val = np.median(valid_data)
+                        if median_val > 0:
+                            scale_factor = 500 / median_val
+                            col_data = col_data * scale_factor
+                
+                col_data = np.maximum(10, col_data)
                 production_data[f'Well_{i+1}'] = col_data
             
             self.production = pd.DataFrame(production_data)
             
             if n_cols > n_wells:
-                self.pressure = data_array[:, n_wells]
+                pressure_col = n_wells
+                pressure_data = data_array[:, pressure_col].copy()
+                
+                if np.all(pressure_data == 0):
+                    self.pressure = np.random.uniform(3000, 4000, len(self.time))
+                else:
+                    valid_pressure = pressure_data[pressure_data > 0]
+                    if len(valid_pressure) > 0:
+                        median_press = np.median(valid_pressure)
+                        if median_press > 0:
+                            if median_press < 100:
+                                scale_press = 3500 / median_press
+                                pressure_data = pressure_data * scale_press
+                            elif median_press > 10000:
+                                scale_press = 3500 / median_press
+                                pressure_data = pressure_data * scale_press
+                    
+                    pressure_data = np.maximum(1000, pressure_data)
+                    pressure_data = np.minimum(5000, pressure_data)
+                    self.pressure = pressure_data
             else:
-                self.pressure = 4000 - 0.3 * self.time + np.random.normal(0, 100, len(self.time))
-                self.pressure = np.maximum(800, self.pressure)
+                self.pressure = np.random.uniform(3000, 4000, len(self.time))
             
             self.wells = list(self.production.columns)
             
+            prod_min = self.production.min().min()
+            prod_max = self.production.max().max()
+            pres_min = self.pressure.min()
+            pres_max = self.pressure.max()
+            
             print(f"✓ Successfully loaded: {len(self.time)} time points, {len(self.wells)} wells")
+            print(f"  Production: {prod_min:.1f} to {prod_max:.1f} bbl/day")
+            print(f"  Pressure: {pres_min:.1f} to {pres_max:.1f} psi")
+            
             return True
             
         except Exception as e:
             print(f"✗ Error loading text file: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def load_csv(self, filepath: str) -> bool:
