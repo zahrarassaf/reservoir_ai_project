@@ -4,7 +4,6 @@ from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
 import logging
 from scipy import integrate, interpolate, optimize
-import matplotlib.pyplot as plt
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -25,17 +24,15 @@ class ReservoirProperties:
 
 @dataclass
 class SimulationParameters:
-    forecast_years: int = 3
+    forecast_years: int = 10
     oil_price: float = 75.0
     operating_cost: float = 18.0
-    discount_rate: float = 0.12
+    discount_rate: float = 0.10
     time_step_days: int = 30
     max_iterations: int = 100
     convergence_tolerance: float = 1e-6
     minimum_production_rate: float = 10.0
-    economic_limit: float = 5.0
-    initial_investment_per_well: float = 3000000.0
-    annual_fixed_costs: float = 1000000.0
+    economic_limit: float = 20.0
 
 class MaterialBalance:
     
@@ -230,9 +227,7 @@ class ReservoirSimulator:
             'discount_rate': self.params.discount_rate,
             'time_step_days': self.params.time_step_days,
             'max_iterations': self.params.max_iterations,
-            'convergence_tolerance': self.params.convergence_tolerance,
-            'initial_investment_per_well': self.params.initial_investment_per_well,
-            'annual_fixed_costs': self.params.annual_fixed_costs
+            'convergence_tolerance': self.params.convergence_tolerance
         }
     
     def _generate_error_results(self) -> Dict:
@@ -459,245 +454,237 @@ class ReservoirSimulator:
         return forecast_data
     
     def _perform_economic_analysis(self, forecast_results: Dict) -> Dict:
-    """Perform realistic economic analysis on forecast results."""
-    if not forecast_results:
+        if not forecast_results:
+            return {
+                'npv': 0,
+                'irr': 0,
+                'roi': 0,
+                'total_revenue': 0,
+                'total_opex': 0,
+                'gross_profit': 0,
+                'net_profit': 0,
+                'payback_period_years': float('inf'),
+                'initial_investment': 0
+            }
+        
+        num_wells = len(forecast_results)
+        num_producers = sum(1 for name in forecast_results.keys() if 'INJE' not in name.upper())
+        num_injectors = num_wells - num_producers
+        
+        drilling_cost_per_well = 1_500_000
+        completion_cost_per_well = 800_000
+        facilities_cost = 2_000_000
+        
+        initial_investment = (num_wells * (drilling_cost_per_well + completion_cost_per_well) + 
+                             facilities_cost)
+        
+        forecast_years = self.params.forecast_years
+        annual_production = np.zeros(forecast_years)
+        annual_revenues = np.zeros(forecast_years)
+        annual_opex_costs = np.zeros(forecast_years)
+        
+        for well_name, forecast in forecast_results.items():
+            days = forecast['forecast_time']
+            rates = forecast['forecast_rates']
+            
+            if len(days) < 2:
+                continue
+            
+            for year in range(forecast_years):
+                start_day = year * 365
+                end_day = min((year + 1) * 365, days[-1])
+                
+                year_mask = (days >= start_day) & (days <= end_day)
+                if not np.any(year_mask):
+                    continue
+                
+                year_days = days[year_mask]
+                year_rates = rates[year_mask]
+                
+                if len(year_days) > 1:
+                    production = np.trapz(year_rates, year_days)
+                else:
+                    production = year_rates[0] * min(365, end_day - start_day)
+                
+                annual_production[year] += production
+        
+        total_revenue = 0
+        total_opex = 0
+        
+        for year in range(forecast_years):
+            revenue = annual_production[year] * self.params.oil_price
+            annual_revenues[year] = revenue
+            
+            variable_opex = annual_production[year] * self.params.operating_cost
+            fixed_annual_opex = 500_000
+            annual_opex_costs[year] = variable_opex + fixed_annual_opex
+            
+            total_revenue += revenue
+            total_opex += annual_opex_costs[year]
+        
+        cash_flows = [-initial_investment]
+        
+        for year in range(forecast_years):
+            net_cash_flow = annual_revenues[year] - annual_opex_costs[year]
+            cash_flows.append(net_cash_flow)
+        
+        npv_value = self._calculate_npv(cash_flows, self.params.discount_rate)
+        irr_value = self._calculate_irr(cash_flows)
+        
+        total_profit = total_revenue - total_opex - initial_investment
+        roi_value = (total_profit / initial_investment) * 100 if initial_investment > 0 else 0
+        
+        payback_years = self._calculate_payback(cash_flows)
+        
+        if irr_value > 1.0:
+            irr_value = 1.0
+        elif irr_value < -0.9:
+            irr_value = -0.9
+        
+        if roi_value > 300:
+            roi_value = 300
+        elif roi_value < -100:
+            roi_value = -100
+        
+        if abs(npv_value) < 1e-3:
+            npv_value = 0
+        
         return {
-            'npv': 0,
-            'irr': 0,
-            'roi': 0,
-            'total_revenue': 0,
-            'total_opex': 0,
-            'gross_profit': 0,
-            'net_profit': 0,
-            'payback_period_years': float('inf'),
-            'initial_investment': 0
+            'npv': npv_value / 1e6,
+            'irr': irr_value * 100,
+            'roi': roi_value,
+            'total_revenue': total_revenue,
+            'total_opex': total_opex,
+            'gross_profit': total_revenue - total_opex,
+            'net_profit': total_profit,
+            'payback_period_years': payback_years,
+            'initial_investment': initial_investment
         }
     
-    # Calculate realistic initial investment
-    num_wells = len(forecast_results)
-    
-    # More realistic investment costs (in USD)
-    # - Drilling: $1-2M per well
-    # - Completion: $0.5-1M per well
-    # - Facilities: $0.5M per well
-    # Total: ~$2-3M per well
-    drilling_cost_per_well = 1_500_000  # USD
-    completion_cost_per_well = 800_000   # USD
-    facilities_cost = 2_000_000  # Fixed facility cost
-    
-    initial_investment = (num_wells * (drilling_cost_per_well + completion_cost_per_well) + 
-                         facilities_cost)
-    
-    # Calculate annual production and revenues
-    forecast_years = self.params.forecast_years
-    annual_production = np.zeros(forecast_years)
-    annual_revenues = np.zeros(forecast_years)
-    annual_opex_costs = np.zeros(forecast_years)
-    
-    for well_name, forecast in forecast_results.items():
-        days = forecast['forecast_time']
-        rates = forecast['forecast_rates']
+    def _calculate_npv(self, cash_flows: List[float], discount_rate: float) -> float:
+        if discount_rate <= -1:
+            return sum(cash_flows)
         
-        if len(days) < 2:
-            continue
-        
-        # Calculate annual production for each well
-        for year in range(forecast_years):
-            start_day = year * 365
-            end_day = min((year + 1) * 365, days[-1])
+        npv = 0.0
+        for t, cf in enumerate(cash_flows):
+            if cf != 0:
+                denominator = (1 + discount_rate) ** t
+                if denominator != 0:
+                    npv += cf / denominator
+        return npv
+    
+    def _calculate_irr(self, cash_flows: List[float]) -> float:
+        try:
+            cash_flows_array = np.array(cash_flows)
+            non_zero_idx = np.where(cash_flows_array != 0)[0]
             
-            # Find indices for this year
-            year_mask = (days >= start_day) & (days <= end_day)
-            if not np.any(year_mask):
-                continue
+            if len(non_zero_idx) < 2:
+                return 0.0
             
-            year_days = days[year_mask]
-            year_rates = rates[year_mask]
+            positive_flows = cash_flows_array[cash_flows_array > 0]
+            negative_flows = cash_flows_array[cash_flows_array < 0]
             
-            if len(year_days) > 1:
-                # Calculate production using trapezoidal integration
-                production = np.trapz(year_rates, year_days)
-            else:
-                production = year_rates[0] * min(365, end_day - start_day)
+            if len(positive_flows) == 0 or len(negative_flows) == 0:
+                return 0.0
             
-            annual_production[year] += production
-    
-    # Calculate revenues and costs
-    total_revenue = 0
-    total_opex = 0
-    
-    for year in range(forecast_years):
-        # Revenue from oil sales
-        revenue = annual_production[year] * self.params.oil_price
-        annual_revenues[year] = revenue
-        
-        # Operating costs (per barrel + fixed annual costs)
-        variable_opex = annual_production[year] * self.params.operating_cost
-        fixed_annual_opex = 500_000  # USD per year for maintenance, personnel, etc.
-        annual_opex_costs[year] = variable_opex + fixed_annual_opex
-        
-        total_revenue += revenue
-        total_opex += annual_opex_costs[year]
-    
-    # Calculate cash flows
-    cash_flows = [-initial_investment]  # Year 0: initial investment
-    
-    for year in range(forecast_years):
-        net_cash_flow = annual_revenues[year] - annual_opex_costs[year]
-        cash_flows.append(net_cash_flow)
-    
-    # Calculate economic metrics
-    npv_value = self._calculate_realistic_npv(cash_flows, self.params.discount_rate)
-    irr_value = self._calculate_realistic_irr(cash_flows)
-    
-    # Calculate total profit and ROI
-    total_profit = total_revenue - total_opex - initial_investment
-    roi_value = (total_profit / initial_investment) * 100 if initial_investment > 0 else 0
-    
-    # Calculate payback period
-    payback_years = self._calculate_realistic_payback(cash_flows)
-    
-    # Apply realistic constraints
-    if irr_value > 1.0:  # Cap at 100% (1.0)
-        irr_value = 1.0
-    elif irr_value < -0.9:  # Cap at -90%
-        irr_value = -0.9
-    
-    if roi_value > 300:  # Cap ROI at 300%
-        roi_value = 300
-    elif roi_value < -100:  # Cap ROI at -100%
-        roi_value = -100
-    
-    return {
-        'npv': npv_value / 1e6,  # Convert to millions
-        'irr': irr_value * 100,  # Convert to percentage
-        'roi': roi_value,
-        'total_revenue': total_revenue,
-        'total_opex': total_opex,
-        'gross_profit': total_revenue - total_opex,
-        'net_profit': total_profit,
-        'payback_period_years': payback_years,
-        'initial_investment': initial_investment
-    }
-
-def _calculate_realistic_npv(self, cash_flows: List[float], discount_rate: float) -> float:
-    """Calculate NPV with realistic assumptions."""
-    npv = 0.0
-    for t, cf in enumerate(cash_flows):
-        if cf != 0:
-            denominator = (1 + discount_rate) ** t
-            if denominator != 0:
-                npv += cf / denominator
-    
-    # Round to avoid tiny negative/positive values
-    if abs(npv) < 1000:
-        npv = 0
-    
-    return npv
-
-def _calculate_realistic_irr(self, cash_flows: List[float]) -> float:
-    """Calculate IRR with realistic bounds and validation."""
-    try:
-        # Filter out trailing zeros
-        cash_flows_array = np.array(cash_flows)
-        non_zero_idx = np.where(cash_flows_array != 0)[0]
-        
-        if len(non_zero_idx) < 2:
-            return 0.0
-        
-        # Check if there's at least one positive and one negative cash flow
-        positive_flows = cash_flows_array[cash_flows_array > 0]
-        negative_flows = cash_flows_array[cash_flows_array < 0]
-        
-        if len(positive_flows) == 0 or len(negative_flows) == 0:
-            return 0.0
-        
-        # Try to find IRR using scipy's root finding
-        def npv_func(rate):
-            npv_val = 0.0
-            for t, cf in enumerate(cash_flows):
-                if cf != 0:
-                    denominator = (1 + rate) ** t
-                    if denominator != 0:
-                        npv_val += cf / denominator
-            return npv_val
-        
-        # Try different starting points
-        test_points = [-0.5, -0.1, 0.0, 0.1, 0.5, 1.0]
-        best_rate = 0.0
-        min_error = float('inf')
-        
-        for start_rate in test_points:
-            try:
-                # Use secant method
-                rate = start_rate
-                for _ in range(50):
-                    f_val = npv_func(rate)
-                    f_prime = 0.0
-                    
-                    # Approximate derivative
-                    epsilon = 1e-6
-                    f_val_plus = npv_func(rate + epsilon)
-                    f_prime = (f_val_plus - f_val) / epsilon if epsilon != 0 else 1
-                    
-                    if abs(f_prime) < 1e-12:
-                        break
-                    
-                    rate_new = rate - f_val / f_prime
-                    
-                    # Keep rate within reasonable bounds
-                    if rate_new < -0.9:
-                        rate_new = -0.9
-                    elif rate_new > 2.0:
-                        rate_new = 2.0
-                    
-                    if abs(rate_new - rate) < 1e-8:
+            def npv_func(rate):
+                npv_val = 0.0
+                for t, cf in enumerate(cash_flows):
+                    if cf != 0:
+                        denominator = (1 + rate) ** t
+                        if denominator != 0:
+                            npv_val += cf / denominator
+                return npv_val
+            
+            test_points = [-0.5, -0.1, 0.0, 0.1, 0.5, 1.0]
+            best_rate = 0.0
+            min_error = float('inf')
+            
+            for start_rate in test_points:
+                try:
+                    rate = start_rate
+                    for _ in range(50):
+                        f_val = npv_func(rate)
+                        epsilon = 1e-6
+                        f_val_plus = npv_func(rate + epsilon)
+                        f_prime = (f_val_plus - f_val) / epsilon if epsilon != 0 else 1
+                        
+                        if abs(f_prime) < 1e-12:
+                            break
+                        
+                        rate_new = rate - f_val / f_prime
+                        
+                        if rate_new < -0.9:
+                            rate_new = -0.9
+                        elif rate_new > 2.0:
+                            rate_new = 2.0
+                        
+                        if abs(rate_new - rate) < 1e-8:
+                            rate = rate_new
+                            break
+                        
                         rate = rate_new
-                        break
                     
-                    rate = rate_new
-                
-                # Check if this is a better solution
-                error = abs(npv_func(rate))
-                if error < min_error and -0.9 < rate < 2.0:
-                    min_error = error
-                    best_rate = rate
-                    
-            except:
-                continue
-        
-        if min_error < 1e-3:
-            return best_rate
-        else:
-            return 0.0
+                    error = abs(npv_func(rate))
+                    if error < min_error and -0.9 < rate < 2.0:
+                        min_error = error
+                        best_rate = rate
+                        
+                except:
+                    continue
             
-    except Exception as e:
-        logger.warning(f"IRR calculation failed: {e}")
-        return 0.0
-
-def _calculate_realistic_payback(self, cash_flows: List[float]) -> float:
-    """Calculate realistic payback period."""
-    if len(cash_flows) < 2:
+            if min_error < 1e-3:
+                return best_rate
+            else:
+                return 0.0
+                
+        except Exception as e:
+            logger.warning(f"IRR calculation failed: {e}")
+            return 0.0
+    
+    def _calculate_payback(self, cash_flows: List[float]) -> float:
+        if len(cash_flows) < 2:
+            return float('inf')
+        
+        initial_investment = abs(cash_flows[0]) if cash_flows[0] < 0 else 0
+        
+        if initial_investment <= 0:
+            return 0.0
+        
+        cumulative_cash_flow = 0.0
+        for year, cf in enumerate(cash_flows[1:], start=1):
+            cumulative_cash_flow += cf
+            
+            if cumulative_cash_flow >= initial_investment:
+                previous_cumulative = cumulative_cash_flow - cf
+                cash_flow_in_year = cf
+                
+                if cash_flow_in_year > 0:
+                    fraction = (initial_investment - previous_cumulative) / cash_flow_in_year
+                    return year - 1 + fraction
+                else:
+                    return year - 1
+        
         return float('inf')
     
-    initial_investment = abs(cash_flows[0]) if cash_flows[0] < 0 else 0
-    
-    if initial_investment <= 0:
-        return 0.0
-    
-    cumulative_cash_flow = 0.0
-    for year, cf in enumerate(cash_flows[1:], start=1):
-        cumulative_cash_flow += cf
+    def get_summary_statistics(self) -> Dict:
+        if not self.results:
+            return {}
         
-        if cumulative_cash_flow >= initial_investment:
-            # Linear interpolation for fractional year
-            previous_cumulative = cumulative_cash_flow - cf
-            cash_flow_in_year = cf
-            
-            if cash_flow_in_year > 0:
-                fraction = (initial_investment - previous_cumulative) / cash_flow_in_year
-                return year - 1 + fraction
-            else:
-                return year - 1
-    
-    return float('inf')
+        summary = {
+            'total_wells': len(self.data.wells),
+            'simulated_wells': len(self.results.get('decline_analysis', {})),
+            'forecast_years': self.params.forecast_years,
+            'economic_results': self.results.get('economic_analysis', {})
+        }
+        
+        decline_results = self.results.get('decline_analysis', {})
+        if decline_results:
+            qis = [r['qi'] for r in decline_results.values()]
+            summary.update({
+                'avg_initial_rate': np.mean(qis) if qis else 0,
+                'min_initial_rate': np.min(qis) if qis else 0,
+                'max_initial_rate': np.max(qis) if qis else 0
+            })
+        
+        return summary
