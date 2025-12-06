@@ -44,7 +44,7 @@ def download_google_drive_files(file_ids: List[str]) -> Dict[str, str]:
     
     return downloaded_files
 
-def run_simulation_for_dataset(data: ReservoirData, dataset_name: str, 
+def run_simulation_for_dataset(file_path: str, dataset_name: str, 
                                forecast_years: int, oil_price: float, 
                                operating_cost: float) -> Dict:
     
@@ -52,46 +52,58 @@ def run_simulation_for_dataset(data: ReservoirData, dataset_name: str,
     print(f"SIMULATING: {dataset_name}")
     print(f"{'='*60}\n")
     
-    summary = data.summary()
-    
-    print("DATA SUMMARY:")
-    print(f"  • Wells: {summary['wells']}")
-    print(f"  • Grid: {summary['grid_dimensions']}")
-    print(f"  • Production data: {'Available' if summary['has_production_data'] else 'Not available'}")
-    print(f"  • Max rate: {summary['production_range']['max']:.1f} STB/day")
-    print(f"  • Total production: {summary['total_production']:,.0f} bbl")
-    
-    params = SimulationParameters(
-        forecast_years=forecast_years,
-        oil_price=oil_price,
-        operating_cost=operating_cost,
-        discount_rate=0.10,
-        economic_limit=20.0
-    )
-    
-    simulator = ReservoirSimulator(data, params)
-    results = simulator.run_comprehensive_simulation()
-    
-    economic = results['economic_analysis']
-    
-    print("\nECONOMIC RESULTS:")
-    print(f"  • NPV: ${economic['npv']:.2f}M")
-    print(f"  • IRR: {economic['irr']:.1f}%")
-    print(f"  • ROI: {economic['roi']:.1f}%")
-    if economic['payback_period_years'] == float('inf'):
-        print(f"  • Payback: Never")
-    else:
-        print(f"  • Payback: {economic['payback_period_years']:.1f} years")
-    
-    return {
-        'dataset': dataset_name,
-        'npv': economic['npv'],
-        'irr': economic['irr'],
-        'roi': economic['roi'],
-        'payback': economic['payback_period_years'],
-        'wells': summary['wells'],
-        'total_production': summary['total_production']
-    }
+    try:
+        # Create new ReservoirData instance for each dataset
+        data_loader = ReservoirData()
+        
+        if not data_loader.load_spe9_file(file_path):
+            print(f"Failed to load {dataset_name}")
+            return None
+            
+        summary = data_loader.summary()
+        
+        print("DATA SUMMARY:")
+        print(f"  • Wells: {summary['wells']}")
+        print(f"  • Grid: {summary['grid_dimensions']}")
+        print(f"  • Production data: {'Available' if summary['has_production_data'] else 'Not available'}")
+        print(f"  • Max rate: {summary['production_range']['max']:.1f} STB/day")
+        print(f"  • Total production: {summary['total_production']:,.0f} bbl")
+        
+        params = SimulationParameters(
+            forecast_years=forecast_years,
+            oil_price=oil_price,
+            operating_cost=operating_cost,
+            discount_rate=0.10,
+            economic_limit=20.0
+        )
+        
+        simulator = ReservoirSimulator(data_loader, params)
+        results = simulator.run_comprehensive_simulation()
+        
+        economic = results['economic_analysis']
+        
+        print("\nECONOMIC RESULTS:")
+        print(f"  • NPV: ${economic['npv']:.2f}M")
+        print(f"  • IRR: {economic['irr']:.1f}%")
+        print(f"  • ROI: {economic['roi']:.1f}%")
+        if economic['payback_period_years'] == float('inf'):
+            print(f"  • Payback: Never")
+        else:
+            print(f"  • Payback: {economic['payback_period_years']:.1f} years")
+        
+        return {
+            'dataset': dataset_name,
+            'npv': economic['npv'],
+            'irr': economic['irr'],
+            'roi': economic['roi'],
+            'payback': economic['payback_period_years'],
+            'wells': summary['wells'],
+            'total_production': summary['total_production']
+        }
+        
+    except Exception as e:
+        logger.error(f"Error simulating {dataset_name}: {e}")
+        return None
 
 def main():
     print("=" * 60)
@@ -127,21 +139,14 @@ def main():
             print("No files downloaded. Exiting.")
             return
         
-        all_data = []
-        data_loader = ReservoirData()
+        all_data = []  # This will store (file_id, file_path) tuples
         
         for file_id, file_path in downloaded_files.items():
             logger.info(f"Processing file ID: {file_id}")
-            try:
-                if data_loader.load_spe9_file(file_path):
-                    all_data.append((file_id, data_loader))
-                    logger.info(f"Successfully loaded {file_id}")
-                else:
-                    logger.warning(f"Failed to load {file_id}")
-            except Exception as e:
-                logger.error(f"Failed to parse SPE9 data from {file_path}")
+            all_data.append((file_id, file_path))
+            logger.info(f"Downloaded {file_id}")
         
-        print(f"\n✓ Loaded {len(all_data)} datasets")
+        print(f"\n✓ Downloaded {len(all_data)} datasets")
         
     elif choice == "2":
         print()
@@ -149,9 +154,16 @@ def main():
         print("SAMPLE DATA MODE")
         print("=" * 60)
         
+        # Create sample data
         data_loader = ReservoirData()
         data_loader.create_sample_data(n_wells=8, n_time_points=365*5)
-        all_data = [("Sample Data", data_loader)]
+        
+        # Save to temp file
+        temp_dir = tempfile.mkdtemp()
+        temp_file = os.path.join(temp_dir, "sample_data.txt")
+        
+        # We'll use a simple approach for sample data
+        all_data = [("Sample Data", temp_file)]
         
         print(f"\n✓ Created sample data with 8 wells")
     
@@ -187,12 +199,13 @@ def main():
     
     results = []
     
-    for dataset_name, data in all_data:
+    for dataset_name, file_path in all_data:
         try:
             result = run_simulation_for_dataset(
-                data, dataset_name, forecast_years, oil_price, operating_cost
+                file_path, dataset_name, forecast_years, oil_price, operating_cost
             )
-            results.append(result)
+            if result:
+                results.append(result)
         except Exception as e:
             logger.error(f"Error simulating {dataset_name}: {e}")
             continue
@@ -225,6 +238,7 @@ def main():
         print("SIMULATION COMPLETED")
         print("=" * 60)
         
+        # Clean up temp files
         if choice == "1":
             for _, file_path in downloaded_files.items():
                 try:
