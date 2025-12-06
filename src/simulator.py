@@ -198,6 +198,39 @@ class ReservoirSimulator:
         self.results = {}
         self.well_analysis = {}
     
+    def _get_parameters_summary(self) -> Dict:
+        """Get summary of simulation parameters."""
+        return {
+            'forecast_years': self.params.forecast_years,
+            'oil_price': self.params.oil_price,
+            'operating_cost': self.params.operating_cost,
+            'discount_rate': self.params.discount_rate,
+            'time_step_days': self.params.time_step_days,
+            'max_iterations': self.params.max_iterations,
+            'convergence_tolerance': self.params.convergence_tolerance
+        }
+    
+    def _generate_error_results(self) -> Dict:
+        """Generate error results when simulation fails."""
+        return {
+            'error': 'Simulation failed due to insufficient data',
+            'material_balance': {},
+            'decline_analysis': {},
+            'production_forecast': {},
+            'economic_analysis': {
+                'npv': 0,
+                'irr': 0,
+                'roi': 0,
+                'total_revenue': 0,
+                'total_opex': 0,
+                'gross_profit': 0,
+                'net_profit': 0,
+                'payback_period_years': float('inf'),
+                'initial_investment': 0
+            },
+            'simulation_parameters': self._get_parameters_summary()
+        }
+    
     def run_comprehensive_simulation(self) -> Dict:
         """
         Run complete reservoir simulation including:
