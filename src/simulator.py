@@ -1,12 +1,16 @@
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Tuple
-from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass, field
 import logging
 from scipy import integrate, interpolate, optimize
 from scipy.sparse import diags
 import matplotlib.pyplot as plt
+import warnings
+from numpy_financial import irr as npf_irr, npv as npf_npv
 
+# Suppress warnings for cleaner output
+warnings.filterwarnings('ignore')
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -27,10 +31,12 @@ class SimulationParameters:
     forecast_years: int = 3
     oil_price: float = 75.0  # USD/bbl
     operating_cost: float = 18.0  # USD/bbl
-    discount_rate: float = 0.12  # 12%
+    discount_rate: float = 0.12  # 12% annual
     time_step_days: int = 30
     max_iterations: int = 100
     convergence_tolerance: float = 1e-6
+    minimum_production_rate: float = 10.0  # Minimum production rate STB/day
+    economic_limit: float = 5.0  # Economic limit STB/day
 
 class MaterialBalance:
     """
@@ -42,15 +48,20 @@ class MaterialBalance:
                      sw: float, boi: float) -> float:
         """Calculate Original Oil In Place (STB)."""
         # 7758 = conversion factor (acre-ft to bbl)
+        if area <= 0 or thickness <= 0 or porosity <= 0 or boi <= 0:
+            return 0.0
         return 7758 * area * thickness * porosity * (1 - sw) / boi
     
     @staticmethod
     def calculate_cumulative_production(production_rates: np.ndarray, 
                                        time_points: np.ndarray) -> float:
         """Calculate cumulative production using trapezoidal integration."""
-        if len(production_rates) < 2:
-            return 0.0
-        return np.trapz(production_rates, time_points)
+        if len(production_rates) < 2 or len(time_points) < 2:
+            return production_rates[0] * (time_points[-1] - time_points[0]) if len(time_points) > 0 else 0.0
+        
+        # Ensure arrays are the same length
+        min_len = min(len(production_rates), len(time_points))
+        return np.trapz(production_rates[:min_len], time_points[:min_len])
     
     @staticmethod
     def solve_material_balance(oip: float, n_p: float, bo: float, boi: float,
@@ -66,14 +77,17 @@ class MaterialBalance:
         We = water influx
         """
         # Simplified for volumetric depletion drive
+        if oip <= 0:
+            return 0.0
+            
         f = n_p * bo
         eo = (bo - boi) + boi * ce * delta_p
         
-        return f / eo if eo != 0 else oip
+        return f / eo if abs(eo) > 1e-10 else oip
 
 class DeclineCurveAnalysis:
     """
-    Implement Arps decline curve analysis.
+    Implement Arps decline curve analysis with robust fitting.
     """
     
     @staticmethod
@@ -84,23 +98,39 @@ class DeclineCurveAnalysis:
         Args:
             qi: Initial production rate
             di: Initial decline rate
-            b: Decline exponent (0 < b <= 1)
+            b: Decline exponent (0 < b <= 2)
             t: Time array
         
         Returns:
             Production rates over time
         """
-        return qi / (1 + b * di * t) ** (1/b)
+        if b <= 0 or di <= 0:
+            # Fall back to exponential decline
+            return qi * np.exp(-di * t)
+        
+        # Prevent division by zero and overflow
+        safe_b = min(max(b, 0.1), 1.9)
+        safe_di = min(max(di, 1e-6), 1.0)
+        
+        denominator = 1 + safe_b * safe_di * t
+        # Clip denominator to prevent overflow
+        denominator = np.clip(denominator, 1e-10, None)
+        
+        return qi / denominator ** (1/safe_b)
     
     @staticmethod
     def exponential_decline(qi: float, di: float, t: np.ndarray) -> np.ndarray:
         """Calculate production rate using exponential decline."""
-        return qi * np.exp(-di * t)
+        safe_di = min(max(di, 1e-6), 1.0)
+        return qi * np.exp(-safe_di * t)
     
     @staticmethod
     def harmonic_decline(qi: float, di: float, t: np.ndarray) -> np.ndarray:
         """Calculate production rate using harmonic decline."""
-        return qi / (1 + di * t)
+        safe_di = min(max(di, 1e-6), 1.0)
+        denominator = 1 + safe_di * t
+        denominator = np.clip(denominator, 1e-10, None)
+        return qi / denominator
     
     @staticmethod
     def fit_decline_curve(time: np.ndarray, rate: np.ndarray, 
@@ -111,69 +141,115 @@ class DeclineCurveAnalysis:
         Returns:
             Dictionary with fitted parameters and R² value
         """
-        if len(time) < 3:
-            logger.warning("Insufficient data for decline curve fitting")
+        if len(time) < 3 or len(rate) < 3:
             return {}
         
+        # Remove any zero or negative rates
+        valid_mask = (rate > 0) & (~np.isnan(rate)) & (~np.isinf(rate))
+        if np.sum(valid_mask) < 3:
+            return {}
+        
+        time_valid = time[valid_mask]
+        rate_valid = rate[valid_mask]
+        
         # Normalize time
-        t_norm = time - time[0]
+        t_norm = time_valid - time_valid[0]
         
         if method == 'exponential':
-            # Linear regression on log(q) vs t
-            log_rate = np.log(rate[rate > 0])
-            valid_idx = rate > 0
-            t_valid = t_norm[valid_idx]
-            
-            if len(t_valid) < 2:
+            try:
+                # Linear regression on log(q) vs t
+                log_rate = np.log(rate_valid)
+                
+                if len(t_norm) < 2:
+                    return {}
+                
+                A = np.vstack([t_norm, np.ones_like(t_norm)]).T
+                m, c = np.linalg.lstsq(A, log_rate, rcond=None)[0]
+                
+                qi_fit = np.exp(c)
+                di_fit = max(-m, 1e-6)  # Ensure positive decline
+                
+                # Calculate fitted rates
+                rate_fit = qi_fit * np.exp(-di_fit * t_norm)
+                
+                # Calculate R²
+                ss_res = np.sum((rate_valid - rate_fit) ** 2)
+                ss_tot = np.sum((rate_valid - np.mean(rate_valid)) ** 2)
+                r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+                
+                return {
+                    'qi': qi_fit,
+                    'di': di_fit,
+                    'b': 0,  # Exponential has b=0
+                    'r_squared': r_squared,
+                    'method': 'exponential'
+                }
+            except Exception as e:
+                logger.warning(f"Exponential fit failed: {e}")
                 return {}
-            
-            A = np.vstack([t_valid, np.ones_like(t_valid)]).T
-            m, c = np.linalg.lstsq(A, log_rate, rcond=None)[0]
-            
-            qi_fit = np.exp(c)
-            di_fit = -m
-            
-            # Calculate fitted rates
-            rate_fit = qi_fit * np.exp(-di_fit * t_norm)
-            
-            # Calculate R²
-            ss_res = np.sum((rate - rate_fit) ** 2)
-            ss_tot = np.sum((rate - np.mean(rate)) ** 2)
-            r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
-            
-            return {
-                'qi': qi_fit,
-                'di': di_fit,
-                'b': 0,  # Exponential has b=0
-                'r_squared': r_squared,
-                'method': 'exponential'
-            }
         
         elif method == 'hyperbolic':
-            # Non-linear least squares for hyperbolic
-            def hyperbolic_func(t, qi, di, b):
-                return qi / (1 + b * di * t) ** (1/b)
-            
-            # Initial guess
-            qi_guess = rate[0]
-            di_guess = 0.01
-            b_guess = 0.8
-            
             try:
-                popt, _ = optimize.curve_fit(
+                # Use more robust fitting approach
+                def hyperbolic_func(t, qi, di, b):
+                    # Safe implementation
+                    b_safe = max(min(b, 1.9), 0.1)
+                    di_safe = max(min(di, 0.5), 1e-6)
+                    denom = 1 + b_safe * di_safe * t
+                    denom = np.clip(denom, 1e-10, None)
+                    return qi / denom ** (1/b_safe)
+                
+                # Initial guess from data
+                qi_guess = rate_valid[0]
+                # Estimate decline rate from first and last points
+                if len(rate_valid) > 1:
+                    rate_ratio = rate_valid[-1] / rate_valid[0]
+                    if rate_ratio > 0 and t_norm[-1] > 0:
+                        di_guess = -np.log(rate_ratio) / t_norm[-1]
+                        di_guess = max(min(di_guess, 0.5), 0.001)
+                    else:
+                        di_guess = 0.01
+                else:
+                    di_guess = 0.01
+                
+                b_guess = 0.8  # Reasonable starting point
+                
+                # Use bounds for stability
+                bounds = (
+                    [max(qi_guess * 0.1, 1), 1e-6, 0.1],  # Lower bounds
+                    [qi_guess * 10, 1.0, 2.0]             # Upper bounds
+                )
+                
+                popt, pcov = optimize.curve_fit(
                     hyperbolic_func,
                     t_norm,
-                    rate,
+                    rate_valid,
                     p0=[qi_guess, di_guess, b_guess],
-                    bounds=([0, 1e-6, 0.1], [np.inf, 1, 2])
+                    bounds=bounds,
+                    maxfev=5000,
+                    method='trf'
                 )
                 
                 qi_fit, di_fit, b_fit = popt
-                rate_fit = hyperbolic_func(t_norm, *popt)
                 
-                ss_res = np.sum((rate - rate_fit) ** 2)
-                ss_tot = np.sum((rate - np.mean(rate)) ** 2)
-                r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
+                # Validate parameters
+                qi_fit = max(qi_fit, 1)
+                di_fit = max(min(di_fit, 0.5), 1e-6)
+                b_fit = max(min(b_fit, 1.9), 0.1)
+                
+                # Calculate fitted rates
+                rate_fit = hyperbolic_func(t_norm, qi_fit, di_fit, b_fit)
+                
+                # Calculate R²
+                ss_res = np.sum((rate_valid - rate_fit) ** 2)
+                ss_tot = np.sum((rate_valid - np.mean(rate_valid)) ** 2)
+                r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+                
+                # Ensure good fit
+                if r_squared < 0.7:
+                    logger.warning(f"Poor hyperbolic fit R²={r_squared:.3f}")
+                    # Fall back to exponential
+                    return DeclineCurveAnalysis.fit_decline_curve(time, rate, 'exponential')
                 
                 return {
                     'qi': qi_fit,
@@ -184,8 +260,10 @@ class DeclineCurveAnalysis:
                 }
                 
             except Exception as e:
-                logger.error(f"Hyperbolic fit failed: {e}")
-                return {}
+                logger.warning(f"Hyperbolic fit failed, trying exponential: {e}")
+                return DeclineCurveAnalysis.fit_decline_curve(time, rate, 'exponential')
+        
+        return {}
 
 class ReservoirSimulator:
     """
@@ -197,6 +275,12 @@ class ReservoirSimulator:
         self.params = params
         self.results = {}
         self.well_analysis = {}
+        self._initialize_well_data()
+    
+    def _initialize_well_data(self):
+        """Initialize and validate well data."""
+        if not hasattr(self.data, 'wells'):
+            self.data.wells = {}
     
     def _get_parameters_summary(self) -> Dict:
         """Get summary of simulation parameters."""
@@ -275,15 +359,21 @@ class ReservoirSimulator:
     
     def _validate_data(self) -> bool:
         """Validate input data for simulation."""
-        if not self.data.wells:
+        if not self.data.wells or len(self.data.wells) == 0:
             logger.error("No well data available")
             return False
         
         valid_wells = 0
         for well_name, well in self.data.wells.items():
-            if len(well.time_points) >= 3 and len(well.production_rates) >= 3:
-                if np.any(well.production_rates > 0):
-                    valid_wells += 1
+            # Check if well has time_points and production_rates attributes
+            if (hasattr(well, 'time_points') and hasattr(well, 'production_rates')):
+                time_points = well.time_points if hasattr(well.time_points, '__len__') else []
+                production_rates = well.production_rates if hasattr(well.production_rates, '__len__') else []
+                
+                if (len(time_points) >= 3 and len(production_rates) >= 3 and 
+                    len(time_points) == len(production_rates)):
+                    if np.any(production_rates > 0):
+                        valid_wells += 1
         
         if valid_wells == 0:
             logger.error("No valid production data available")
@@ -298,16 +388,27 @@ class ReservoirSimulator:
         mb = MaterialBalance()
         
         for well_name, well in self.data.wells.items():
-            if len(well.time_points) < 2:
+            if not hasattr(well, 'time_points') or not hasattr(well, 'production_rates'):
                 continue
+            
+            time_points = well.time_points
+            production_rates = well.production_rates
+            
+            if len(time_points) < 2 or len(production_rates) < 2:
+                continue
+            
+            # Ensure same length
+            min_len = min(len(time_points), len(production_rates))
+            time_points = time_points[:min_len]
+            production_rates = production_rates[:min_len]
             
             # Calculate cumulative production
             cum_production = mb.calculate_cumulative_production(
-                well.production_rates,
-                well.time_points
+                production_rates,
+                time_points
             )
             
-            # Estimate reservoir properties (simplified)
+            # Estimate reservoir properties (from SPE9 typical values)
             area = 40.0  # acres (assumed)
             thickness = 50.0  # ft (assumed)
             porosity = 0.15  # fraction (assumed)
@@ -318,13 +419,14 @@ class ReservoirSimulator:
             oip = mb.calculate_oip(area, thickness, porosity, sw, boi)
             
             # Recovery factor
-            recovery_factor = cum_production / oip if oip > 0 else 0
+            recovery_factor = (cum_production / oip) if oip > 0 else 0
             
             results[well_name] = {
                 'cumulative_production': cum_production,
                 'estimated_oip': oip,
-                'recovery_factor': recovery_factor,
-                'production_days': well.time_points[-1] - well.time_points[0]
+                'recovery_factor': min(recovery_factor, 1.0),  # Cap at 100%
+                'production_days': time_points[-1] - time_points[0] if len(time_points) > 0 else 0,
+                'peak_rate': np.max(production_rates) if len(production_rates) > 0 else 0
             }
         
         return results
@@ -335,39 +437,49 @@ class ReservoirSimulator:
         dca = DeclineCurveAnalysis()
         
         for well_name, well in self.data.wells.items():
-            if len(well.time_points) < 3:
+            if not hasattr(well, 'time_points') or not hasattr(well, 'production_rates'):
                 continue
             
-            time_data = well.time_points - well.time_points[0]
+            time_data = well.time_points
             rate_data = well.production_rates
             
-            # Try exponential fit first
-            exp_result = dca.fit_decline_curve(
-                well.time_points, rate_data, method='exponential'
-            )
+            if len(time_data) < 3 or len(rate_data) < 3:
+                continue
             
-            # Try hyperbolic fit
+            # Ensure same length and valid data
+            min_len = min(len(time_data), len(rate_data))
+            time_data = time_data[:min_len]
+            rate_data = rate_data[:min_len]
+            
+            # Remove any NaNs or infs
+            valid_mask = ~np.isnan(rate_data) & ~np.isinf(rate_data) & (rate_data > 0)
+            if np.sum(valid_mask) < 3:
+                continue
+            
+            time_valid = time_data[valid_mask]
+            rate_valid = rate_data[valid_mask]
+            
+            # Try hyperbolic fit first
             hyp_result = dca.fit_decline_curve(
-                well.time_points, rate_data, method='hyperbolic'
+                time_valid, rate_valid, method='hyperbolic'
             )
             
-            # Select best fit based on R²
-            best_result = {}
-            if exp_result and exp_result.get('r_squared', 0) > 0.8:
-                best_result = exp_result
-            elif hyp_result and hyp_result.get('r_squared', 0) > 0.8:
-                best_result = hyp_result
-            elif exp_result:
-                best_result = exp_result
-            elif hyp_result:
-                best_result = hyp_result
+            # If hyperbolic fails, try exponential
+            if not hyp_result:
+                exp_result = dca.fit_decline_curve(
+                    time_valid, rate_valid, method='exponential'
+                )
+                if exp_result:
+                    results[well_name] = exp_result
+            else:
+                results[well_name] = hyp_result
             
-            if best_result:
-                results[well_name] = best_result
+            if well_name in results:
+                result = results[well_name]
                 logger.info(f"Decline analysis for {well_name}: "
-                          f"qi={best_result['qi']:.1f}, "
-                          f"di={best_result['di']:.4f}, "
-                          f"R²={best_result.get('r_squared', 0):.3f}")
+                          f"qi={result['qi']:.1f}, "
+                          f"di={result['di']:.4f}, "
+                          f"R²={result.get('r_squared', 0):.3f}")
         
         return results
     
@@ -379,18 +491,20 @@ class ReservoirSimulator:
         
         forecast_data = {}
         
-        for well_name in self.data.wells.keys():
+        for well_name, well in self.data.wells.items():
             if well_name not in dca_results:
                 continue
             
-            well = self.data.wells[well_name]
+            if not hasattr(well, 'time_points'):
+                continue
+            
             params = dca_results[well_name]
             
             # Historical time
             historical_time = well.time_points - well.time_points[0]
             
             # Forecast time
-            forecast_start = historical_time[-1]
+            forecast_start = historical_time[-1] if len(historical_time) > 0 else 0
             forecast_time = np.arange(
                 forecast_start,
                 forecast_start + forecast_days + self.params.time_step_days,
@@ -412,12 +526,19 @@ class ReservoirSimulator:
                     params['qi'], params['di'], forecast_time
                 )
             
-            # Ensure rates are positive
-            forecast_rates = np.maximum(0, forecast_rates)
+            # Apply economic limit
+            economic_limit = self.params.economic_limit
+            forecast_rates = np.where(forecast_rates < economic_limit, 0, forecast_rates)
             
             # Calculate EUR (Estimated Ultimate Recovery)
             if forecast_rates.size > 1:
-                eur = np.trapz(forecast_rates, forecast_time)
+                # Find index where production goes below economic limit
+                non_zero_idx = forecast_rates > 0
+                if np.any(non_zero_idx):
+                    eur = np.trapz(forecast_rates[non_zero_idx], 
+                                 forecast_time[non_zero_idx])
+                else:
+                    eur = 0
             else:
                 eur = 0
             
@@ -425,62 +546,90 @@ class ReservoirSimulator:
                 'forecast_time': forecast_time,
                 'forecast_rates': forecast_rates,
                 'eur': eur,
-                'decline_parameters': params
+                'decline_parameters': params,
+                'economic_limit': economic_limit
             }
         
         return forecast_data
     
     def _perform_economic_analysis(self, forecast_results: Dict) -> Dict:
         """Perform economic analysis on forecast results."""
+        # Initial investment based on number of wells
+        num_wells = len(forecast_results)
+        initial_investment = num_wells * 2_500_000  # $2.5M per well
+        
         total_revenue = 0
         total_opex = 0
-        cash_flows = []
+        monthly_cash_flows = []
+        
+        # Group production by month for all wells
+        all_months = set()
+        monthly_production = {}
         
         for well_name, forecast in forecast_results.items():
-            # Calculate well revenue and costs
-            daily_production = forecast['forecast_rates']
             days = forecast['forecast_time']
+            rates = forecast['forecast_rates']
             
-            if len(daily_production) < 2:
+            if len(days) < 2:
                 continue
             
-            # Calculate cumulative production
-            time_intervals = np.diff(days)
-            avg_rates = 0.5 * (daily_production[:-1] + daily_production[1:])
-            monthly_production = avg_rates * time_intervals
-            
-            # Revenue and costs
-            monthly_revenue = monthly_production * self.params.oil_price
-            monthly_opex = monthly_production * self.params.operating_cost
-            
-            total_revenue += np.sum(monthly_revenue)
-            total_opex += np.sum(monthly_opex)
-            
-            # Monthly cash flows
-            monthly_cash_flow = monthly_revenue - monthly_opex
-            cash_flows.extend(monthly_cash_flow.tolist())
+            # Convert to monthly production
+            for i in range(len(days) - 1):
+                month = int(days[i] / 30)  # Approximate month
+                all_months.add(month)
+                
+                # Average production for this period
+                avg_rate = 0.5 * (rates[i] + rates[i+1])
+                time_interval = days[i+1] - days[i]
+                production = avg_rate * time_interval
+                
+                if month not in monthly_production:
+                    monthly_production[month] = 0
+                monthly_production[month] += production
+        
+        # Calculate cash flows by month
+        sorted_months = sorted(list(all_months))
+        cash_flows = [-initial_investment]  # Initial investment
+        
+        for month in sorted_months:
+            if month in monthly_production and monthly_production[month] > 0:
+                production = monthly_production[month]
+                revenue = production * self.params.oil_price
+                opex = production * self.params.operating_cost
+                
+                total_revenue += revenue
+                total_opex += opex
+                
+                monthly_cash_flow = revenue - opex
+                cash_flows.append(monthly_cash_flow)
+            else:
+                cash_flows.append(0)
         
         # Calculate economic metrics
-        initial_investment = 50_000_000  # $50M
-        cash_flows = [-initial_investment] + cash_flows
-        
-        # NPV calculation
-        npv = self._calculate_npv(cash_flows, self.params.discount_rate/12)
-        
-        # IRR calculation
-        irr = self._calculate_irr(cash_flows)
-        
-        # ROI
-        total_profit = total_revenue - total_opex
-        roi = (total_profit - initial_investment) / initial_investment
-        
-        # Payback period
-        payback_years = self._calculate_payback(cash_flows)
+        if len(cash_flows) > 1:
+            # NPV calculation with monthly discount rate
+            monthly_discount_rate = (1 + self.params.discount_rate) ** (1/12) - 1
+            npv_value = self._calculate_npv(cash_flows, monthly_discount_rate)
+            
+            # IRR calculation
+            irr_value = self._calculate_irr(cash_flows)
+            
+            # ROI
+            total_profit = total_revenue - total_opex - initial_investment
+            roi_value = (total_profit / initial_investment) * 100 if initial_investment > 0 else 0
+            
+            # Payback period
+            payback_years = self._calculate_payback(cash_flows)
+        else:
+            npv_value = 0
+            irr_value = 0
+            roi_value = 0
+            payback_years = float('inf')
         
         return {
-            'npv': npv,
-            'irr': irr,
-            'roi': roi,
+            'npv': npv_value / 1e6,  # Convert to millions
+            'irr': irr_value * 100,  # Convert to percentage
+            'roi': roi_value,
             'total_revenue': total_revenue,
             'total_opex': total_opex,
             'gross_profit': total_revenue - total_opex,
@@ -491,16 +640,56 @@ class ReservoirSimulator:
     
     def _calculate_npv(self, cash_flows: List[float], discount_rate: float) -> float:
         """Calculate Net Present Value."""
-        npv = 0
+        if discount_rate <= -1:  # Invalid discount rate
+            return sum(cash_flows)
+        
+        npv = 0.0
         for t, cf in enumerate(cash_flows):
-            npv += cf / ((1 + discount_rate) ** t)
+            if cf != 0:
+                denominator = (1 + discount_rate) ** t
+                if denominator != 0:
+                    npv += cf / denominator
         return npv
     
     def _calculate_irr(self, cash_flows: List[float]) -> float:
         """Calculate Internal Rate of Return."""
+        # Filter out trailing zeros
+        cash_flows_array = np.array(cash_flows)
+        non_zero_idx = np.where(cash_flows_array != 0)[0]
+        
+        if len(non_zero_idx) == 0:
+            return 0.0
+        
+        last_non_zero = non_zero_idx[-1]
+        trimmed_cash_flows = cash_flows[:last_non_zero + 1]
+        
+        # Check for valid IRR calculation
+        if len(trimmed_cash_flows) < 2:
+            return 0.0
+        
+        # Check for sign changes (necessary for IRR)
+        signs = np.sign(trimmed_cash_flows)
+        sign_changes = np.sum(np.diff(signs) != 0)
+        
+        if sign_changes < 1:
+            return 0.0
+        
         try:
-            return np.irr(cash_flows)
-        except:
+            # Use numpy's IRR function with bounds
+            irr_value = npf_irr(trimmed_cash_flows)
+            
+            # Validate IRR result
+            if irr_value is None or np.isnan(irr_value) or np.isinf(irr_value):
+                return 0.0
+            
+            # IRR should be reasonable (between -0.99 and 10)
+            if irr_value <= -0.99 or irr_value > 10:
+                return 0.0
+            
+            return irr_value
+            
+        except Exception as e:
+            logger.warning(f"IRR calculation failed: {e}")
             return 0.0
     
     def _calculate_payback(self, cash_flows: List[float]) -> float:
@@ -508,6 +697,97 @@ class ReservoirSimulator:
         cumulative = 0
         for period, cf in enumerate(cash_flows):
             cumulative += cf
-            if cumulative >= 0:
+            if cumulative >= 0 and period > 0:
                 return period / 12  # Convert months to years
         return float('inf')
+    
+    def get_summary_statistics(self) -> Dict:
+        """Get summary statistics of simulation results."""
+        if not self.results:
+            return {}
+        
+        summary = {
+            'total_wells': len(self.data.wells),
+            'simulated_wells': len(self.results.get('decline_analysis', {})),
+            'forecast_years': self.params.forecast_years,
+            'economic_results': self.results.get('economic_analysis', {})
+        }
+        
+        # Add well-level statistics
+        decline_results = self.results.get('decline_analysis', {})
+        if decline_results:
+            qis = [r['qi'] for r in decline_results.values()]
+            summary.update({
+                'avg_initial_rate': np.mean(qis) if qis else 0,
+                'min_initial_rate': np.min(qis) if qis else 0,
+                'max_initial_rate': np.max(qis) if qis else 0
+            })
+        
+        return summary
+
+# Example usage function
+def run_example_simulation():
+    """Example function to demonstrate usage."""
+    # Create sample data
+    class WellData:
+        def __init__(self, name, time_points, production_rates):
+            self.name = name
+            self.time_points = time_points
+            self.production_rates = production_rates
+    
+    class DataContainer:
+        def __init__(self):
+            self.wells = {}
+    
+    # Create sample wells
+    data = DataContainer()
+    
+    # Create 5 sample wells with synthetic data
+    np.random.seed(42)
+    for i in range(1, 6):
+        time_points = np.arange(0, 1000, 30)  # 30-day intervals
+        qi = np.random.uniform(500, 1500)
+        di = np.random.uniform(0.0002, 0.0005)
+        b = np.random.uniform(0.5, 1.5)
+        
+        # Generate production using hyperbolic decline
+        production_rates = qi / (1 + b * di * time_points) ** (1/b)
+        
+        # Add some noise
+        production_rates *= np.random.normal(1, 0.1, len(production_rates))
+        production_rates = np.maximum(production_rates, 0)
+        
+        well = WellData(f"PRODU{i}", time_points, production_rates)
+        data.wells[f"PRODU{i}"] = well
+    
+    # Set simulation parameters
+    params = SimulationParameters(
+        forecast_years=3,
+        oil_price=75.0,
+        operating_cost=18.0,
+        discount_rate=0.12
+    )
+    
+    # Run simulation
+    simulator = ReservoirSimulator(data, params)
+    results = simulator.run_comprehensive_simulation()
+    
+    # Print results
+    print("\n=== SIMULATION RESULTS ===")
+    print(f"Number of wells: {len(data.wells)}")
+    
+    economic = results.get('economic_analysis', {})
+    print(f"\nEconomic Analysis:")
+    print(f"  NPV: ${economic.get('npv', 0):.2f}M")
+    print(f"  IRR: {economic.get('irr', 0):.1f}%")
+    print(f"  ROI: {economic.get('roi', 0):.1f}%")
+    print(f"  Payback: {economic.get('payback_period_years', 0):.1f} years")
+    
+    return results
+
+if __name__ == "__main__":
+    # Configure logging
+    logging.basicConfig(level=logging.INFO)
+    
+    # Run example
+    results = run_example_simulation()
