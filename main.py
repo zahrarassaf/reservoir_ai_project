@@ -11,6 +11,12 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from src.economics import ReservoirSimulator, EconomicParameters
 from src.data_loader import DataLoader
 
+try:
+    from src.visualizer import Visualizer
+    HAS_VISUALIZER = True
+except ImportError:
+    HAS_VISUALIZER = False
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -129,24 +135,36 @@ class AdvancedReservoirSimulationProject:
                 reservoir_data = self.data_loader.get_reservoir_data()
             elif dataset['type'] == 'custom':
                 import pandas as pd
-                df = pd.read_csv(dataset['path'])
+                df = pd.read_csv(dataset['path'], on_bad_lines='skip')
                 time_col = df.columns[0]
                 rate_col = df.columns[1] if len(df.columns) > 1 else df.columns[0]
                 
                 from src.economics import WellProductionData
-                reservoir_data = {
-                    'wells': {
-                        'CUSTOM_WELL': WellProductionData(
-                            time_points=df[time_col].values,
-                            oil_rate=df[rate_col].values,
-                            well_type='PRODUCER'
-                        )
-                    },
-                    'grid': {
-                        'dimensions': (24, 25, 15),
-                        'porosity': np.random.uniform(0.15, 0.25, 100)
+                time_data = pd.to_numeric(df[time_col], errors='coerce').dropna().values
+                rate_data = pd.to_numeric(df[rate_col], errors='coerce').dropna().values
+                
+                min_len = min(len(time_data), len(rate_data))
+                time_data = time_data[:min_len]
+                rate_data = rate_data[:min_len]
+                
+                if len(time_data) < 3 or len(rate_data) < 3:
+                    print("  Insufficient data, using synthetic")
+                    self.data_loader._generate_synthetic_data()
+                    reservoir_data = self.data_loader.get_reservoir_data()
+                else:
+                    reservoir_data = {
+                        'wells': {
+                            'CUSTOM_WELL': WellProductionData(
+                                time_points=time_data,
+                                oil_rate=rate_data,
+                                well_type='PRODUCER'
+                            )
+                        },
+                        'grid': {
+                            'dimensions': (24, 25, 15),
+                            'porosity': np.random.uniform(0.15, 0.25, 100)
+                        }
                     }
-                }
             else:
                 raise ValueError(f"Unknown dataset type: {dataset['type']}")
             
@@ -169,16 +187,18 @@ class AdvancedReservoirSimulationProject:
             print(f"    Payback: {payback_str} years")
             print(f"    Break-even: ${results['economic_evaluation']['break_even_price']:.1f}/bbl")
             
-            try:
-                from src.visualizer import Visualizer
-                visualizer = Visualizer()
-                dataset_id_short = dataset['id'][:20]
-                visualizer.create_dashboard(results, dataset_id_short)
-                visualizer.plot_production_forecast(results, dataset_id_short)
-                visualizer.plot_economic_results(results, dataset_id_short)
-                print(f"  Visualizations generated for {dataset_id_short}")
-            except Exception as viz_error:
-                print(f"  Visualization failed: {viz_error}")
+            if HAS_VISUALIZER:
+                try:
+                    visualizer = Visualizer()
+                    dataset_id_short = dataset['id'][:20]
+                    visualizer.create_dashboard(results, dataset_id_short)
+                    visualizer.plot_production_forecast(results, dataset_id_short)
+                    visualizer.plot_economic_results(results, dataset_id_short)
+                    print(f"  Visualizations generated for {dataset_id_short}")
+                except Exception as viz_error:
+                    print(f"  Visualization error: {viz_error}")
+            else:
+                print("  Skipping visualizations (Visualizer module not available)")
             
             return {
                 'dataset_id': dataset['id'],
@@ -301,7 +321,9 @@ class AdvancedReservoirSimulationProject:
                 'forecast_years': self.econ_params.forecast_years,
                 'oil_price': self.econ_params.oil_price,
                 'discount_rate': self.econ_params.discount_rate,
-                'opex_per_bbl': self.econ_params.opex_per_bbl
+                'opex_per_bbl': self.econ_params.opex_per_bbl,
+                'capex_per_producer': self.econ_params.capex_per_producer / 1_000_000,
+                'fixed_opex': self.econ_params.fixed_opex / 1_000_000
             },
             'simulations': []
         }
@@ -310,7 +332,8 @@ class AdvancedReservoirSimulationProject:
             sim_data = {
                 'dataset_id': result['dataset_id'],
                 'dataset_name': result['dataset_name'],
-                'success': result['success']
+                'success': result['success'],
+                'type': result.get('type', 'unknown')
             }
             
             if result['success']:
@@ -321,7 +344,9 @@ class AdvancedReservoirSimulationProject:
                     'irr': float(results['economic_evaluation']['irr']),
                     'roi': float(results['economic_evaluation']['roi']),
                     'payback_period': float(results['economic_evaluation']['payback_period']),
-                    'eur': float(results['production_forecast'].get('total_eur', 0))
+                    'break_even_price': float(results['economic_evaluation']['break_even_price']),
+                    'eur': float(results['production_forecast'].get('total_eur', 0)),
+                    'recovery_factor': float(results['reservoir_properties'].get('recovery_factor', 0))
                 })
             else:
                 sim_data['error'] = result.get('error', 'Unknown error')
@@ -390,6 +415,10 @@ class AdvancedReservoirSimulationProject:
         print("\n" + "="*80)
         print("SIMULATION COMPLETED")
         print("="*80)
+        print(f"\nResults:")
+        print(f"  - Report: {report_file}")
+        print(f"  - Visualizations: visualizations/ folder")
+        print(f"  - Processed datasets: {len([r for r in self.simulation_results if r['success']])}/{len(self.simulation_results)}")
 
 def main():
     try:
