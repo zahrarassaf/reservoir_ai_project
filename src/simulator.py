@@ -1,7 +1,3 @@
-"""
-Advanced Reservoir Simulator
-"""
-
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Tuple, Any
@@ -362,7 +358,7 @@ class ReservoirSimulator:
         return results
     
     def _perform_economic_analysis(self, production_forecast: Dict) -> Dict[str, Any]:
-        logger.info("Performing economic analysis")
+        logger.info("Performing economic analysis - FIXED VERSION")
         
         if not production_forecast or 'time' not in production_forecast:
             logger.warning("No forecast data for economic analysis")
@@ -386,20 +382,37 @@ class ReservoirSimulator:
         operating_cost = self.params.operating_cost
         discount_rate = self.params.discount_rate
         
+        print(f"\nECONOMIC CALCULATION DEBUG:")
+        print(f"  Time points: {len(time)}")
+        print(f"  Total production sum: {np.sum(total_production):.0f} bbl")
+        print(f"  Oil price: ${oil_price}/bbl")
+        print(f"  Operating cost: ${operating_cost}/bbl")
+        print(f"  Initial investment: ${self.params.initial_investment/1e6:.1f}M")
+        
         dt = np.diff(time, prepend=time[0])
         daily_revenue = total_production * oil_price
         daily_opex = total_production * operating_cost
         
         cash_flows = np.zeros(len(time))
         
+        total_revenue_sum = 0
+        total_opex_sum = 0
+        
         for i in range(len(time)):
             revenue = daily_revenue[i] * dt[i]
             opex = daily_opex[i] * dt[i]
             cash_flows[i] = revenue - opex
+            total_revenue_sum += revenue
+            total_opex_sum += opex
+        
+        print(f"  Total revenue: ${total_revenue_sum/1e6:.1f}M")
+        print(f"  Total opex: ${total_opex_sum/1e6:.1f}M")
         
         cash_flows[0] -= self.params.initial_investment
         
         cash_flows = np.clip(cash_flows, -1e9, 1e9)
+        
+        print(f"  Cash flows range: ${np.min(cash_flows)/1e6:.1f}M to ${np.max(cash_flows)/1e6:.1f}M")
         
         npv = 0.0
         for i in range(len(time)):
@@ -410,6 +423,8 @@ class ReservoirSimulator:
             npv += cash_flows[i] * discount_factor
         
         npv = np.clip(npv, -1e9, 1e9)
+        
+        print(f"  NPV before clip: ${npv/1e6:.1f}M")
         
         cumulative_cf = np.cumsum(cash_flows)
         
@@ -434,6 +449,14 @@ class ReservoirSimulator:
         profit_margin = 0.0
         if total_revenue > 0:
             profit_margin = ((total_revenue - total_opex) / total_revenue) * 100
+        
+        print(f"\nECONOMIC RESULTS:")
+        print(f"  NPV: ${npv/1e6:.2f}M")
+        print(f"  IRR: {irr*100:.1f}%")
+        print(f"  ROI: {roi:.1f}%")
+        if payback_period:
+            print(f"  Payback: {payback_period:.1f} years")
+        print(f"  Profit margin: {profit_margin:.1f}%")
         
         results = {
             'npv': float(npv),
