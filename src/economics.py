@@ -1,296 +1,315 @@
-"""
-Economic Analysis for Reservoir Simulation
-"""
-
 import numpy as np
-from typing import Dict, List, Optional
+from numpy_financial import irr as npf_irr
+from scipy.optimize import newton
 import logging
 
 logger = logging.getLogger(__name__)
 
-
 class EconomicAnalyzer:
-    """Perform economic analysis for reservoir projects"""
-    
-    def __init__(self, parameters: Optional[Dict] = None):
-        """
-        Initialize economic analyzer
+    def __init__(self, config=None):
+        self.config = config or {}
+        self.capex = self.config.get('capex', 50000000)  # 50M USD
+        self.discount_rate = self.config.get('discount_rate', 0.10)  # 10%
+        self.fixed_opex = self.config.get('fixed_opex', 2000000)  # 2M USD/year
+        self.tax_rate = self.config.get('tax_rate', 0.30)  # 30%
+        self.royalty_rate = self.config.get('royalty_rate', 0.125)  # 12.5%
+        self.abandonment_cost = self.config.get('abandonment_cost', 5000000)  # 5M USD
         
-        Parameters
-        ----------
-        parameters : Dict, optional
-            Economic parameters
+    def calculate_project_economics(self, production_forecast, oil_price, opex_per_bbl, 
+                                   forecast_years=10):
         """
-        self.parameters = parameters or self.default_parameters()
-    
-    def default_parameters(self) -> Dict:
-        """Get default economic parameters"""
+        Calculate comprehensive project economics
+        
+        Parameters:
+        -----------
+        production_forecast : list
+            Annual production forecast in barrels
+        oil_price : float
+            Oil price in USD/bbl
+        opex_per_bbl : float
+            Operating cost in USD/bbl
+        forecast_years : int
+            Forecast period in years
+        """
+        if len(production_forecast) != forecast_years:
+            raise ValueError(f"Production forecast must have {forecast_years} years")
+        
+        # 1. Calculate annual cash flows
+        cash_flows = self._calculate_cash_flows(
+            production_forecast, oil_price, opex_per_bbl, forecast_years
+        )
+        
+        # 2. Calculate financial metrics
+        npv = self._calculate_npv(cash_flows)
+        irr = self._calculate_irr(cash_flows)
+        roi = self._calculate_roi(cash_flows)
+        payback = self._calculate_payback_period(cash_flows)
+        profitability_index = self._calculate_profitability_index(cash_flows)
+        
+        # 3. Calculate annual metrics
+        annual_metrics = self._calculate_annual_metrics(
+            production_forecast, cash_flows, oil_price, opex_per_bbl
+        )
+        
         return {
-            'oil_price': 75.0,  # USD/bbl
-            'operating_cost': 18.0,  # USD/bbl
-            'capital_cost': 5000000.0,  # USD (initial)
-            'discount_rate': 0.12,
-            'tax_rate': 0.30,
-            'project_life': 20,  # years
-            'royalty_rate': 0.125,
-            'abandonment_cost': 1000000.0  # USD
+            'npv': npv,  # in millions USD
+            'irr': irr,  # percentage
+            'roi': roi,  # percentage
+            'payback_period': payback,  # years
+            'profitability_index': profitability_index,
+            'cash_flows': cash_flows,  # annual cash flows
+            'annual_metrics': annual_metrics,
+            'break_even_price': self._calculate_break_even_price(cash_flows, production_forecast),
+            'unit_development_cost': self._calculate_udc(cash_flows, sum(production_forecast))
         }
     
-    def calculate_npv(self, cash_flows: List[float], 
-                     time_periods: List[float]) -> float:
-        """
-        Calculate Net Present Value
+    def _calculate_cash_flows(self, production_forecast, oil_price, opex_per_bbl, years):
+        """Calculate detailed annual cash flows"""
+        cash_flows = []
         
-        Parameters
-        ----------
-        cash_flows : List[float]
-            Annual cash flows
-        time_periods : List[float]
-            Time periods in years
+        # Year 0: Capital expenditures (negative)
+        cash_flows.append(-self.capex)
+        
+        # Production years
+        for year in range(years):
+            annual_production = production_forecast[year]
             
-        Returns
-        -------
-        float
-            NPV in USD
-        """
-        discount_rate = self.parameters['discount_rate']
-        npv = 0.0
+            # Gross revenue
+            gross_revenue = annual_production * oil_price
+            
+            # Royalty payments (government share)
+            royalty = gross_revenue * self.royalty_rate
+            
+            # Operating costs
+            variable_opex = annual_production * opex_per_bbl
+            total_opex = variable_opex + self.fixed_opex
+            
+            # Depreciation (straight-line over 10 years)
+            depreciation = self.capex / 10 if year < 10 else 0
+            
+            # Earnings before interest and tax (EBIT)
+            ebit = gross_revenue - royalty - total_opex - depreciation
+            
+            # Tax calculation
+            taxable_income = max(0, ebit)  # No tax on losses
+            tax = taxable_income * self.tax_rate
+            
+            # Net operating cash flow
+            # Add back depreciation (non-cash expense)
+            operating_cf = ebit - tax + depreciation
+            
+            cash_flows.append(operating_cf)
         
-        for cf, t in zip(cash_flows, time_periods):
-            discount_factor = 1.0 / ((1.0 + discount_rate) ** t)
+        # Last year: Abandonment cost
+        cash_flows[-1] -= self.abandonment_cost
+        
+        return cash_flows
+    
+    def _calculate_npv(self, cash_flows):
+        """Calculate Net Present Value with proper discounting"""
+        npv = 0.0
+        for t, cf in enumerate(cash_flows):
+            discount_factor = 1 / ((1 + self.discount_rate) ** t)
             npv += cf * discount_factor
         
-        return npv
+        # Convert to millions for readability
+        return npv / 1_000_000
     
-    def calculate_irr(self, cash_flows: List[float], 
-                     time_periods: List[float]) -> float:
-        """
-        Calculate Internal Rate of Return
-        
-        Parameters
-        ----------
-        cash_flows : List[float]
-            Annual cash flows
-        time_periods : List[float]
-            Time periods in years
+    def _calculate_irr(self, cash_flows):
+        """Calculate Internal Rate of Return"""
+        try:
+            # Use numpy_financial IRR with fallback
+            irr_value = npf_irr(cash_flows)
+            if irr_value is None:
+                return self._approximate_irr(cash_flows)
             
-        Returns
-        -------
-        float
-            IRR as decimal
-        """
-        from scipy import optimize
+            # Check if IRR is realistic
+            if abs(irr_value) > 10:  # Unrealistically high
+                return self._approximate_irr(cash_flows)
+                
+            return irr_value * 100  # Convert to percentage
+        except Exception as e:
+            logger.warning(f"IRR calculation failed: {e}")
+            return self._approximate_irr(cash_flows)
+    
+    def _approximate_irr(self, cash_flows):
+        """Fallback IRR calculation using secant method"""
+        if len(cash_flows) < 2:
+            return 0.0
         
         def npv_func(rate):
-            npv_val = 0.0
-            for cf, t in zip(cash_flows, time_periods):
-                discount_factor = 1.0 / ((1.0 + rate) ** t)
-                npv_val += cf * discount_factor
-            return npv_val
+            return sum(cf / ((1 + rate) ** i) for i, cf in enumerate(cash_flows))
         
         try:
-            irr = optimize.newton(npv_func, 0.1, maxiter=1000)
-            return max(0, irr)  # Ensure non-negative
+            # Try to find IRR between -0.9 and 10
+            solution = newton(npv_func, x0=0.1, maxiter=100)
+            if -0.9 < solution < 10:
+                return solution * 100
         except:
+            pass
+        
+        return 0.0
+    
+    def _calculate_roi(self, cash_flows):
+        """Return on Investment calculation"""
+        if len(cash_flows) < 2:
             return 0.0
-    
-    def calculate_payback_period(self, cash_flows: List[float],
-                                time_periods: List[float]) -> float:
-        """
-        Calculate payback period
         
-        Parameters
-        ----------
-        cash_flows : List[float]
-            Annual cash flows
-        time_periods : List[float]
-            Time periods in years
-            
-        Returns
-        -------
-        float
-            Payback period in years
-        """
-        cumulative_cf = 0.0
-        for cf, t in zip(cash_flows, time_periods):
-            cumulative_cf += cf
-            if cumulative_cf >= 0:
-                return t
-        
-        return float('inf')  # Never pays back
-    
-    def calculate_roi(self, initial_investment: float,
-                     net_profit: float) -> float:
-        """
-        Calculate Return on Investment
-        
-        Parameters
-        ----------
-        initial_investment : float
-            Initial investment in USD
-        net_profit : float
-            Net profit in USD
-            
-        Returns
-        -------
-        float
-            ROI as decimal
-        """
+        initial_investment = abs(cash_flows[0])
         if initial_investment == 0:
             return 0.0
         
-        return net_profit / initial_investment
+        total_return = sum(cf for cf in cash_flows[1:] if cf > 0)
+        roi_percentage = (total_return / initial_investment) * 100
+        
+        return roi_percentage
     
-    def analyze_production_scenario(self, production_profile: List[float],
-                                   time_years: List[float]) -> Dict:
-        """
-        Analyze economic scenario for production profile
+    def _calculate_payback_period(self, cash_flows):
+        """Calculate discounted payback period"""
+        if len(cash_flows) < 2:
+            return None
         
-        Parameters
-        ----------
-        production_profile : List[float]
-            Annual production in bbl
-        time_years : List[float]
-            Time in years
-            
-        Returns
-        -------
-        Dict
-            Economic analysis results
-        """
-        oil_price = self.parameters['oil_price']
-        operating_cost = self.parameters['operating_cost']
-        discount_rate = self.parameters['discount_rate']
-        tax_rate = self.parameters['tax_rate']
+        cumulative_pv = 0
+        initial_investment = abs(cash_flows[0])
         
-        # Calculate annual cash flows
-        cash_flows = []
-        revenues = []
-        costs = []
+        for t, cf in enumerate(cash_flows):
+            if t == 0:
+                continue
+            
+            discount_factor = 1 / ((1 + self.discount_rate) ** t)
+            discounted_cf = cf * discount_factor
+            cumulative_pv += discounted_cf
+            
+            if cumulative_pv >= initial_investment:
+                # Linear interpolation for partial years
+                if t == 1:
+                    return 1.0
+                previous_pv = cumulative_pv - discounted_cf
+                remaining = initial_investment - previous_pv
+                fractional_year = remaining / discounted_cf
+                return t - 1 + fractional_year
         
-        for i, production in enumerate(production_profile):
-            # Revenue
-            revenue = production * oil_price
-            
-            # Operating costs
-            opex = production * operating_cost
-            
-            # Taxable income
-            taxable_income = revenue - opex
-            
-            # Tax
-            tax = max(0, taxable_income) * tax_rate
-            
-            # Net cash flow
-            net_cf = taxable_income - tax
-            
-            # Add initial capital cost in year 0
-            if i == 0:
-                net_cf -= self.parameters['capital_cost']
-            
-            # Add abandonment cost in last year
-            if i == len(production_profile) - 1:
-                net_cf -= self.parameters['abandonment_cost']
-            
-            cash_flows.append(net_cf)
-            revenues.append(revenue)
-            costs.append(opex)
-        
-        # Calculate metrics
-        npv = self.calculate_npv(cash_flows, time_years)
-        irr = self.calculate_irr(cash_flows, time_years)
-        payback = self.calculate_payback_period(cash_flows, time_years)
-        
-        total_revenue = sum(revenues)
-        total_cost = sum(costs)
-        net_profit = total_revenue - total_cost - self.parameters['capital_cost']
-        roi = self.calculate_roi(self.parameters['capital_cost'], net_profit)
-        
-        results = {
-            'npv_usd': float(npv),
-            'irr': float(irr),
-            'payback_period_years': float(payback) if payback != float('inf') else None,
-            'roi': float(roi),
-            'total_revenue_usd': float(total_revenue),
-            'total_cost_usd': float(total_cost),
-            'net_profit_usd': float(net_profit),
-            'cash_flows': [float(cf) for cf in cash_flows],
-            'revenues': [float(r) for r in revenues],
-            'costs': [float(c) for c in costs],
-            'parameters': self.parameters.copy()
-        }
-        
-        logger.info(f"Economic analysis: NPV = ${npv/1e6:.2f}M, IRR = {irr*100:.1f}%")
-        
-        return results
+        return None  # Never pays back
     
-    def perform_sensitivity_analysis(self, base_production: List[float],
-                                    base_time: List[float]) -> Dict:
-        """
-        Perform sensitivity analysis
+    def _calculate_profitability_index(self, cash_flows):
+        """Profitability Index = PV of future cash flows / Initial investment"""
+        if len(cash_flows) < 2 or cash_flows[0] >= 0:
+            return 0.0
         
-        Parameters
-        ----------
-        base_production : List[float]
-            Base case production profile
-        base_time : List[float]
-            Time periods
-            
-        Returns
-        -------
-        Dict
-            Sensitivity analysis results
-        """
-        # Get base case NPV
-        base_results = self.analyze_production_scenario(base_production, base_time)
-        base_npv = base_results['npv_usd']
+        initial_investment = abs(cash_flows[0])
+        pv_future_cash = sum(
+            cf / ((1 + self.discount_rate) ** t) 
+            for t, cf in enumerate(cash_flows[1:], 1)
+        )
         
-        # Sensitivity parameters
-        sensitivities = {
-            'oil_price': [60, 70, 75, 80, 90],
-            'operating_cost': [12, 15, 18, 21, 24],
-            'discount_rate': [0.08, 0.10, 0.12, 0.14, 0.16],
-            'capital_cost': [3e6, 4e6, 5e6, 6e6, 7e6]
-        }
+        return pv_future_cash / initial_investment
+    
+    def _calculate_annual_metrics(self, production, cash_flows, oil_price, opex_per_bbl):
+        """Calculate detailed annual metrics"""
+        metrics = []
         
+        for year in range(len(production)):
+            annual_metrics = {
+                'year': year + 1,
+                'production_bbl': production[year],
+                'revenue_usd': production[year] * oil_price,
+                'opex_usd': production[year] * opex_per_bbl + self.fixed_opex,
+                'cash_flow_usd': cash_flows[year + 1] if year + 1 < len(cash_flows) else 0,
+                'cumulative_cash_flow_usd': sum(cash_flows[1:year+2]),
+                'unit_technical_cost': (production[year] * opex_per_bbl + self.fixed_opex) / 
+                                      production[year] if production[year] > 0 else 0
+            }
+            metrics.append(annual_metrics)
+        
+        return metrics
+    
+    def _calculate_break_even_price(self, cash_flows, production_forecast):
+        """Calculate minimum oil price for NPV = 0"""
+        total_production = sum(production_forecast)
+        if total_production == 0:
+            return 0.0
+        
+        # Simple approximation: Price where revenue covers all costs
+        total_costs = sum(abs(cf) for cf in cash_flows if cf < 0)
+        break_even = total_costs / total_production
+        
+        return break_even
+    
+    def _calculate_udc(self, cash_flows, total_reserves):
+        """Calculate Unit Development Cost (USD/bbl)"""
+        if total_reserves == 0:
+            return 0.0
+        
+        total_capex = abs(cash_flows[0])
+        return total_capex / total_reserves
+    
+    def sensitivity_analysis(self, production_forecast, base_oil_price, base_opex, 
+                           variables=['oil_price', 'opex', 'capex']):
+        """Perform sensitivity analysis on key variables"""
         results = {}
         
-        for param_name, values in sensitivities.items():
-            npv_values = []
-            
-            for value in values:
-                # Save original parameter
-                original_value = self.parameters[param_name]
+        # Base case
+        base_results = self.calculate_project_economics(
+            production_forecast, base_oil_price, base_opex
+        )
+        base_npv = base_results['npv']
+        
+        # Sensitivity ranges (±20%)
+        for variable in variables:
+            if variable == 'oil_price':
+                variations = [base_oil_price * (1 + d) for d in [-0.2, -0.1, 0, 0.1, 0.2]]
+                npv_changes = []
+                for price in variations:
+                    results_var = self.calculate_project_economics(
+                        production_forecast, price, base_opex
+                    )
+                    npv_changes.append((price, results_var['npv']))
+                results[variable] = npv_changes
                 
-                # Update parameter
-                self.parameters[param_name] = value
+            elif variable == 'opex':
+                variations = [base_opex * (1 + d) for d in [-0.2, -0.1, 0, 0.1, 0.2]]
+                npv_changes = []
+                for opex in variations:
+                    results_var = self.calculate_project_economics(
+                        production_forecast, base_oil_price, opex
+                    )
+                    npv_changes.append((opex, results_var['npv']))
+                results[variable] = npv_changes
                 
-                # Recalculate NPV
-                scenario_results = self.analyze_production_scenario(base_production, base_time)
-                npv_values.append(scenario_results['npv_usd'])
-                
-                # Restore original parameter
-                self.parameters[param_name] = original_value
-            
-            # Calculate sensitivity index
-            sensitivity_index = (max(npv_values) - min(npv_values)) / base_npv
-            
-            results[param_name] = {
-                'values': values,
-                'npv_values': npv_values,
-                'sensitivity_index': sensitivity_index,
-                'base_value': self.parameters[param_name]
-            }
+            elif variable == 'capex':
+                variations = [self.capex * (1 + d) for d in [-0.2, -0.1, 0, 0.1, 0.2]]
+                npv_changes = []
+                for capex in variations:
+                    original_capex = self.capex
+                    self.capex = capex
+                    results_var = self.calculate_project_economics(
+                        production_forecast, base_oil_price, base_opex
+                    )
+                    npv_changes.append((capex, results_var['npv']))
+                    self.capex = original_capex
+                results[variable] = npv_changes
         
-        # Restore original parameters
-        self.parameters = self.default_parameters()
+        return {
+            'base_case': base_results,
+            'sensitivity': results,
+            'tornado_data': self._prepare_tornado_data(results, base_npv)
+        }
+    
+    def _prepare_tornado_data(self, sensitivity_results, base_npv):
+        """Prepare data for tornado chart"""
+        tornado_data = []
         
-        # Identify key parameters
-        key_params = []
-        for param_name, data in results.items():
-            if data['sensitivity_index'] > 0.3:
-                key_params.append(param_name)
+        for variable, variations in sensitivity_results.items():
+            if variations:
+                min_npv = min(v[1] for v in variations)
+                max_npv = max(v[1] for v in variations)
+                tornado_data.append({
+                    'variable': variable,
+                    'min_impact': min_npv - base_npv,
+                    'max_impact': max_npv - base_npv,
+                    'range': abs(max_npv - min_npv)
+                })
         
-        results['key_parameters'] = key_params
-        
-        return results
+        # Sort by impact range
+        tornado_data.sort(key=lambda x: x['range'], reverse=True)
+        return tornado_data
