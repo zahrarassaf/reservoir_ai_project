@@ -1,3 +1,7 @@
+"""
+Advanced Reservoir Simulator
+"""
+
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Tuple, Any
@@ -264,24 +268,46 @@ class ReservoirSimulator:
             historical_rates = self.data.production[well].values
             if len(historical_rates) > 0:
                 forecast_data[:historical_end, i] = historical_rates[:historical_end]
+                last_historical_rate = historical_rates[-1] if len(historical_rates) > 0 else 100
             else:
-                qi = 500
-                forecast_data[:historical_end, i] = qi * np.exp(-0.0005 * self.data.time[:historical_end])
+                last_historical_rate = 100
             
-            qi = 500
+            qi = last_historical_rate
             Di = 0.0005
             
             if well in decline_results:
                 decline = decline_results[well].get('exponential', {})
-                qi = decline.get('initial_rate', 500)
+                qi = decline.get('initial_rate', qi)
                 Di = decline.get('decline_rate', 0.0005 * 365) / 365
+            
+            Di = np.clip(Di, 0.0001, 0.005)
             
             for j in range(historical_end, len(full_time)):
                 dt = full_time[j] - full_time[historical_end - 1] if historical_end > 0 else full_time[j]
-                forecast_data[j, i] = max(0, qi * np.exp(-Di * dt))
+                forecast_rate = qi * np.exp(-Di * dt)
+                forecast_data[j, i] = max(0, forecast_rate)
         
         total_production = forecast_data.sum(axis=1)
         cumulative_production = np.cumsum(total_production)
+        
+        daily_rate_max = np.max(total_production)
+        daily_rate_min = np.min(total_production[total_production > 0])
+        total_cumulative = cumulative_production[-1]
+        
+        print(f"\nFORECAST STATISTICS:")
+        print(f"  Historical days: {historical_end}")
+        print(f"  Forecast days: {forecast_days}")
+        print(f"  Total simulation days: {len(full_time)}")
+        print(f"  Daily rate range: {daily_rate_min:.1f} to {daily_rate_max:.1f} bbl/day")
+        print(f"  Total cumulative production: {total_cumulative:,.0f} bbl")
+        
+        if total_cumulative > 1e12:
+            print(f"  WARNING: Total cumulative too high, scaling down...")
+            scale_factor = 1e9 / total_cumulative
+            forecast_data = forecast_data * scale_factor
+            total_production = forecast_data.sum(axis=1)
+            cumulative_production = np.cumsum(total_production)
+            print(f"  Scaled cumulative: {cumulative_production[-1]:,.0f} bbl")
         
         results = {
             'time': full_time.tolist(),
@@ -358,7 +384,7 @@ class ReservoirSimulator:
         return results
     
     def _perform_economic_analysis(self, production_forecast: Dict) -> Dict[str, Any]:
-        logger.info("Performing economic analysis - FIXED VERSION")
+        logger.info("Performing economic analysis")
         
         if not production_forecast or 'time' not in production_forecast:
             logger.warning("No forecast data for economic analysis")
@@ -382,11 +408,13 @@ class ReservoirSimulator:
         operating_cost = self.params.operating_cost
         discount_rate = self.params.discount_rate
         
-        print(f"\nECONOMIC CALCULATION DEBUG:")
-        print(f"  Time points: {len(time)}")
-        print(f"  Total production sum: {np.sum(total_production):.0f} bbl")
+        print(f"\nECONOMIC INPUTS:")
+        print(f"  Simulation days: {len(time)}")
+        print(f"  Average daily production: {np.mean(total_production):.1f} bbl/day")
+        print(f"  Total production: {np.sum(total_production):,.0f} bbl")
         print(f"  Oil price: ${oil_price}/bbl")
         print(f"  Operating cost: ${operating_cost}/bbl")
+        print(f"  Discount rate: {discount_rate*100:.1f}%")
         print(f"  Initial investment: ${self.params.initial_investment/1e6:.1f}M")
         
         dt = np.diff(time, prepend=time[0])
@@ -395,8 +423,8 @@ class ReservoirSimulator:
         
         cash_flows = np.zeros(len(time))
         
-        total_revenue_sum = 0
-        total_opex_sum = 0
+        total_revenue_sum = 0.0
+        total_opex_sum = 0.0
         
         for i in range(len(time)):
             revenue = daily_revenue[i] * dt[i]
@@ -405,14 +433,15 @@ class ReservoirSimulator:
             total_revenue_sum += revenue
             total_opex_sum += opex
         
-        print(f"  Total revenue: ${total_revenue_sum/1e6:.1f}M")
-        print(f"  Total opex: ${total_opex_sum/1e6:.1f}M")
-        
         cash_flows[0] -= self.params.initial_investment
         
         cash_flows = np.clip(cash_flows, -1e9, 1e9)
         
-        print(f"  Cash flows range: ${np.min(cash_flows)/1e6:.1f}M to ${np.max(cash_flows)/1e6:.1f}M")
+        print(f"\nREVENUE & COSTS:")
+        print(f"  Total revenue: ${total_revenue_sum/1e6:.1f}M")
+        print(f"  Total opex: ${total_opex_sum/1e6:.1f}M")
+        print(f"  Gross profit: ${(total_revenue_sum - total_opex_sum)/1e6:.1f}M")
+        print(f"  Cash flow range: ${np.min(cash_flows)/1e6:.1f}M to ${np.max(cash_flows)/1e6:.1f}M")
         
         npv = 0.0
         for i in range(len(time)):
@@ -423,8 +452,6 @@ class ReservoirSimulator:
             npv += cash_flows[i] * discount_factor
         
         npv = np.clip(npv, -1e9, 1e9)
-        
-        print(f"  NPV before clip: ${npv/1e6:.1f}M")
         
         cumulative_cf = np.cumsum(cash_flows)
         
@@ -455,7 +482,7 @@ class ReservoirSimulator:
         print(f"  IRR: {irr*100:.1f}%")
         print(f"  ROI: {roi:.1f}%")
         if payback_period:
-            print(f"  Payback: {payback_period:.1f} years")
+            print(f"  Payback period: {payback_period:.1f} years")
         print(f"  Profit margin: {profit_margin:.1f}%")
         
         results = {
