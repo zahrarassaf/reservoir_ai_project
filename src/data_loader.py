@@ -1,276 +1,330 @@
-import pandas as pd
 import numpy as np
-from typing import Dict, List, Optional, Tuple, Any
-import os
-import glob
+import pandas as pd
+import re
+from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass
+from datetime import datetime
 import logging
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+@dataclass
+class WellData:
+    name: str
+    time_points: np.ndarray
+    production_rates: np.ndarray
+    pressures: np.ndarray
+    coordinates: Tuple[float, float, float]
+    completion_zones: List[int]
+    
+    def validate(self) -> bool:
+        """Validate well data consistency."""
+        if len(self.time_points) != len(self.production_rates):
+            return False
+        if np.any(self.production_rates < 0):
+            logger.warning(f"Well {self.name} has negative production rates")
+        return True
 
 class ReservoirData:
     def __init__(self):
-        self.production = pd.DataFrame()
-        self.pressure = np.array([])
-        self.time = np.array([])
-        self.wells = []
-        self.metadata = {}
-    
-    def load_txt_file(self, filepath: str) -> bool:
-        print("\n" + "="*60)
-        print("DEBUG: LOAD_TXT_FILE CALLED - VERSION 3.0")
-        print("="*60)
+        self.wells: Dict[str, WellData] = {}
+        self.grid_dimensions: Tuple[int, int, int] = (0, 0, 0)
+        self.porosity: np.ndarray = np.array([])
+        self.permeability: np.ndarray = np.array([])
+        self.depth_top: np.ndarray = np.array([])
+        self.time_unit: str = "days"
+        self.production_unit: str = "bbl/day"
+        self.pressure_unit: str = "psi"
+        self._initial_pressure: float = 3600.0  # psia from SPE9
         
+    def parse_spe9_data(self, file_content: str) -> bool:
+        """
+        Parse SPE9 reservoir simulation data file.
+        
+        Args:
+            file_content: Raw content of SPE9.DATA file
+            
+        Returns:
+            bool: True if parsing successful
+        """
         try:
-            print(f"\nLoading text file: {os.path.basename(filepath)}")
+            lines = file_content.split('\n')
             
-            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                lines = f.readlines()
-            
-            print(f"File has {len(lines)} lines")
-            
-            raw_data = []
-            for i, line in enumerate(lines[:20]):
-                print(f"Line {i+1}: {line.strip()}")
-            
-            data = []
+            # Parse DIMENS
             for i, line in enumerate(lines):
-                line = line.strip()
-                if not line:
-                    continue
-                
-                if any(line.startswith(c) for c in ['#', '//', '%', '*', '!']):
-                    continue
-                
-                numbers = []
-                parts = []
-                
-                if '\t' in line:
-                    parts = line.split('\t')
-                elif ',' in line:
-                    parts = line.split(',')
-                elif ';' in line:
-                    parts = line.split(';')
-                else:
-                    parts = line.split()
-                
-                for part in parts:
-                    part = part.strip()
-                    if part:
-                        try:
-                            num = float(part)
-                            numbers.append(num)
-                        except:
-                            try:
-                                num = float(part.replace(',', ''))
-                                numbers.append(num)
-                            except:
-                                continue
-                
-                if numbers:
-                    data.append(numbers)
+                if 'DIMENS' in line and not line.strip().startswith('--'):
+                    # Get next line with dimensions
+                    dim_line = lines[i+1].strip().strip('/')
+                    dims = [int(x) for x in dim_line.split()]
+                    if len(dims) >= 3:
+                        self.grid_dimensions = tuple(dims[:3])
+                        logger.info(f"Grid dimensions: {self.grid_dimensions}")
             
-            print(f"\nExtracted {len(data)} data rows")
-            
-            if len(data) < 10:
-                print("Not enough data rows")
-                return False
-            
-            max_cols = max(len(row) for row in data)
-            min_cols = min(len(row) for row in data)
-            print(f"Columns: min={min_cols}, max={max_cols}")
-            
-            padded_data = []
-            for row in data:
-                if len(row) < max_cols:
-                    padded_row = list(row) + [0.0] * (max_cols - len(row))
-                    padded_data.append(padded_row)
-                else:
-                    padded_data.append(row)
-            
-            data_array = np.array(padded_data)
-            print(f"Raw data array shape: {data_array.shape}")
-            
-            print("\nFirst 5 rows of raw data:")
-            for i in range(min(5, len(data_array))):
-                print(f"  Row {i}: {data_array[i]}")
-            
-            self.time = np.arange(len(data_array))
-            
-            n_cols = data_array.shape[1]
-            n_wells = min(6, n_cols)
-            
-            print(f"\nProcessing {n_wells} wells from {n_cols} columns")
-            
-            production_data = {}
-            for i in range(n_wells):
-                col_data = data_array[:, i].copy()
-                print(f"\nWell {i+1} raw data:")
-                print(f"  Min: {np.min(col_data):.2f}, Max: {np.max(col_data):.2f}, Mean: {np.mean(col_data):.2f}")
-                
-                if np.all(col_data == 0):
-                    col_data = np.random.uniform(100, 500, len(col_data))
-                    print(f"  All zeros - generated synthetic data")
-                else:
-                    valid_data = col_data[col_data > 0]
-                    if len(valid_data) > 0:
-                        median_val = np.median(valid_data)
-                        print(f"  Median of positive values: {median_val:.2f}")
-                        
-                        if median_val > 0:
-                            if median_val < 1:
-                                scale_factor = 500
-                            elif median_val > 10000:
-                                scale_factor = 500 / median_val
+            # Parse porosities
+            for i, line in enumerate(lines):
+                if 'PORO' in line and not line.strip().startswith('--'):
+                    poro_values = []
+                    j = i + 1
+                    while j < len(lines) and not lines[j].strip().startswith('--'):
+                        if '/' in lines[j]:
+                            break
+                        # Parse values like "600*0.087"
+                        for val in lines[j].split():
+                            if '*' in val:
+                                count, value = val.split('*')
+                                poro_values.extend([float(value)] * int(count))
                             else:
-                                scale_factor = 500 / median_val
-                            
-                            print(f"  Scale factor: {scale_factor:.4f}")
-                            col_data = col_data * scale_factor
-                
-                col_data = np.maximum(10, col_data)
-                col_data = np.minimum(5000, col_data)
-                production_data[f'Well_{i+1}'] = col_data
-                print(f"  Scaled: Min: {np.min(col_data):.1f}, Max: {np.max(col_data):.1f}")
+                                try:
+                                    poro_values.append(float(val))
+                                except:
+                                    pass
+                        j += 1
+                    if poro_values:
+                        self.porosity = np.array(poro_values)
+                        logger.info(f"Porosity loaded: {len(poro_values)} values, "
+                                  f"mean: {np.mean(poro_values):.3f}")
             
-            self.production = pd.DataFrame(production_data)
+            # Parse PVTO data for fluid properties
+            pvto_data = self._parse_pvto_section(lines)
+            if pvto_data:
+                logger.info(f"PVTO data parsed with {len(pvto_data)} rows")
             
-            print(f"\nProcessing pressure data...")
-            if n_cols > n_wells:
-                pressure_col = n_wells
-                pressure_data = data_array[:, pressure_col].copy()
-                print(f"Pressure raw data - Min: {np.min(pressure_data):.2f}, Max: {np.max(pressure_data):.2f}")
-                
-                if np.all(pressure_data == 0):
-                    self.pressure = np.random.uniform(3000, 4000, len(self.time))
-                    print("  All zeros - generated synthetic pressure")
-                else:
-                    valid_pressure = pressure_data[pressure_data > 0]
-                    if len(valid_pressure) > 0:
-                        median_press = np.median(valid_pressure)
-                        print(f"  Median pressure: {median_press:.2f}")
-                        
-                        if median_press > 0:
-                            if median_press < 10:
-                                scale_press = 3500
-                            elif median_press > 10000:
-                                scale_press = 3500 / median_press
-                            else:
-                                scale_press = 3500 / median_press
-                            
-                            print(f"  Pressure scale factor: {scale_press:.4f}")
-                            pressure_data = pressure_data * scale_press
-                    
-                    pressure_data = np.maximum(1000, pressure_data)
-                    pressure_data = np.minimum(5000, pressure_data)
-                    self.pressure = pressure_data
-            else:
-                self.pressure = np.random.uniform(3000, 4000, len(self.time))
-                print("No pressure column - generated synthetic pressure")
+            # Parse well data from COMPDAT and WCONPROD
+            self._parse_well_data(lines)
             
-            self.wells = list(self.production.columns)
-            
-            prod_min = self.production.min().min()
-            prod_max = self.production.max().max()
-            prod_mean = self.production.mean().mean()
-            pres_min = self.pressure.min()
-            pres_max = self.pressure.max()
-            pres_mean = self.pressure.mean()
-            
-            print("\n" + "="*60)
-            print("FINAL DATA STATISTICS:")
-            print("="*60)
-            print(f"✓ Time points: {len(self.time)}")
-            print(f"✓ Wells: {len(self.wells)}")
-            print(f"✓ Production range: {prod_min:.1f} to {prod_max:.1f} bbl/day (mean: {prod_mean:.1f})")
-            print(f"✓ Pressure range: {pres_min:.1f} to {pres_max:.1f} psi (mean: {pres_mean:.1f})")
-            print("="*60)
+            # Generate time series data based on TSTEP
+            time_points = self._parse_time_steps(lines)
+            if time_points.size > 0:
+                self._generate_production_profiles(time_points)
             
             return True
             
         except Exception as e:
-            print(f"\n✗ ERROR loading text file: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error parsing SPE9 data: {e}")
             return False
     
-    def load_csv(self, filepath: str) -> bool:
-        try:
-            return self.load_txt_file(filepath)
-        except:
-            return False
+    def _parse_well_data(self, lines: List[str]) -> None:
+        """Parse well completion and control data."""
+        well_locations = {}
+        
+        # Parse COMPDAT for well locations
+        for i, line in enumerate(lines):
+            if 'COMPDAT' in line and not line.strip().startswith('--'):
+                j = i + 1
+                while j < len(lines) and not lines[j].strip().startswith('--'):
+                    if '/' in lines[j]:
+                        break
+                    parts = lines[j].split()
+                    if len(parts) >= 5:
+                        well_name = parts[0].strip("'")
+                        i_idx, j_idx, k_upper, k_lower = map(int, parts[1:5])
+                        
+                        if well_name not in well_locations:
+                            well_locations[well_name] = {
+                                'i': i_idx,
+                                'j': j_idx,
+                                'k_range': (k_upper, k_lower),
+                                'completions': []
+                            }
+                        well_locations[well_name]['completions'].append(
+                            (i_idx, j_idx, k_upper, k_lower)
+                        )
+                    j += 1
+        
+        # Parse WCONPROD for production controls
+        for i, line in enumerate(lines):
+            if 'WCONPROD' in line and not line.strip().startswith('--'):
+                j = i + 1
+                while j < len(lines) and not lines[j].strip().startswith('--'):
+                    if '/' in lines[j]:
+                        break
+                    parts = lines[j].split()
+                    if len(parts) >= 2:
+                        well_name = parts[0].strip("'")
+                        if '*' in well_name:  # Handle wildcards
+                            continue
+                        if well_name in well_locations:
+                            # Extract control mode and rate
+                            control_mode = parts[2]
+                            try:
+                                oil_rate = float(parts[3]) if len(parts) > 3 else 1500.0
+                                bhp_limit = float(parts[8]) if len(parts) > 8 else 1000.0
+                                well_locations[well_name].update({
+                                    'control_mode': control_mode,
+                                    'oil_rate': oil_rate,
+                                    'bhp_limit': bhp_limit
+                                })
+                            except (ValueError, IndexError):
+                                pass
+                    j += 1
+        
+        # Create WellData objects
+        for well_name, data in well_locations.items():
+            self.wells[well_name] = WellData(
+                name=well_name,
+                time_points=np.array([]),  # Will be populated later
+                production_rates=np.array([]),
+                pressures=np.array([]),
+                coordinates=(data['i'] * 300, data['j'] * 300, 0),  # Using DX=300 from SPE9
+                completion_zones=list(range(data['k_range'][0], data['k_range'][1] + 1))
+            )
     
-    def load_multiple_csv(self, directory: str, pattern: str = "*.csv") -> bool:
-        files = glob.glob(os.path.join(directory, pattern))
+    def _parse_time_steps(self, lines: List[str]) -> np.ndarray:
+        """Parse TSTEP data to get simulation time points."""
+        time_points = [0.0]  # Start at time 0
         
-        if not files:
-            return False
+        for i, line in enumerate(lines):
+            if 'TSTEP' in line and not line.strip().startswith('--'):
+                j = i + 1
+                while j < len(lines) and not lines[j].strip().startswith('--'):
+                    if '/' in lines[j]:
+                        break
+                    parts = lines[j].split()
+                    for part in parts:
+                        if part.endswith('*'):
+                            try:
+                                count = int(part.rstrip('*'))
+                                value = float(parts[parts.index(part) + 1])
+                                time_points.extend([value] * count)
+                            except:
+                                pass
+                        else:
+                            try:
+                                time_points.append(float(part))
+                            except:
+                                pass
+                    j += 1
         
-        for file in files:
-            try:
-                if self.load_txt_file(file):
-                    return True
-            except:
+        # Convert to cumulative time
+        cumulative_time = np.cumsum(time_points)
+        logger.info(f"Time steps parsed: {len(cumulative_time)} points, "
+                   f"total {cumulative_time[-1]:.1f} days")
+        return cumulative_time
+    
+    def _generate_production_profiles(self, time_points: np.ndarray) -> None:
+        """
+        Generate production profiles based on reservoir decline curve analysis.
+        This should be replaced with actual reservoir simulation.
+        """
+        for well_name, well in self.wells.items():
+            n_points = len(time_points)
+            
+            # Generate production profile using Arps decline
+            qi = np.random.uniform(500, 2000)  # Initial rate
+            di = np.random.uniform(0.01, 0.05)  # Decline rate
+            b = np.random.uniform(0.5, 1.5)     # Decline exponent
+            
+            # Hyperbolic decline
+            production = qi / (1 + b * di * time_points) ** (1/b)
+            
+            # Add some noise
+            noise = np.random.normal(0, 50, n_points)
+            production = np.maximum(0, production + noise)
+            
+            # Generate pressure profile
+            initial_pressure = self._initial_pressure
+            pressure_drop = (production / qi) * 500  # Simple correlation
+            pressure = np.maximum(1000, initial_pressure - pressure_drop)
+            
+            well.time_points = time_points
+            well.production_rates = production
+            well.pressures = pressure
+    
+    def _parse_pvto_section(self, lines: List[str]) -> List[Dict]:
+        """Parse PVTO section for oil properties."""
+        pvto_data = []
+        in_pvto = False
+        
+        for line in lines:
+            if 'PVTO' in line and not line.strip().startswith('--'):
+                in_pvto = True
                 continue
+            
+            if in_pvto:
+                if line.strip() == '/':
+                    break
+                if not line.strip().startswith('--'):
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        try:
+                            rs = float(parts[0])  # Solution GOR
+                            pb = float(parts[1])  # Bubble point pressure
+                            bo = float(parts[2])  # Oil FVF
+                            visc = float(parts[3])  # Viscosity
+                            pvto_data.append({
+                                'rs': rs,
+                                'pb': pb,
+                                'bo': bo,
+                                'viscosity': visc
+                            })
+                        except ValueError:
+                            continue
         
-        return False
+        return pvto_data
     
-    def create_sample_data(self, n_days: int = 1825, n_wells: int = 6) -> bool:
+    def summary(self) -> Dict:
+        """Generate comprehensive data summary."""
+        total_wells = len(self.wells)
+        total_production = 0
+        max_production = 0
+        min_production = float('inf')
+        
+        for well in self.wells.values():
+            if well.production_rates.size > 0:
+                total_production += np.sum(well.production_rates)
+                max_production = max(max_production, np.max(well.production_rates))
+                min_production = min(min_production, np.min(well.production_rates))
+        
+        return {
+            'wells': total_wells,
+            'grid_dimensions': self.grid_dimensions,
+            'total_production': total_production,
+            'max_production_rate': max_production if max_production != 0 else 0,
+            'min_production_rate': min_production if min_production != float('inf') else 0,
+            'average_porosity': np.mean(self.porosity) if self.porosity.size > 0 else 0,
+            'has_production_data': any(w.production_rates.size > 0 for w in self.wells.values()),
+            'has_pressure_data': any(w.pressures.size > 0 for w in self.wells.values()),
+            'time_points': len(self.wells[list(self.wells.keys())[0]].time_points) 
+                          if self.wells else 0
+        }
+    
+    def create_sample_data(self, n_wells: int = 5, n_time_points: int = 365) -> None:
+        """Create realistic sample data for testing."""
         np.random.seed(42)
         
-        self.time = np.arange(n_days)
-        
-        production_data = {}
         for i in range(n_wells):
-            qi = 500 + np.random.uniform(-100, 100)
-            Di = 0.0003 + np.random.uniform(-0.0001, 0.0001)
-            rates = qi * np.exp(-Di * self.time)
-            noise = np.random.normal(0, 20, n_days)
-            rates = np.maximum(5, rates + noise)
-            production_data[f'Well_{i+1}'] = rates
+            well_name = f"WELL_{i+1:03d}"
+            
+            # Time points (daily for one year)
+            time_points = np.arange(n_time_points)
+            
+            # Generate production using decline curve
+            qi = np.random.uniform(800, 2000)
+            di = np.random.uniform(0.001, 0.01)
+            b = 0.8  # Hyperbolic decline exponent
+            
+            production = qi / (1 + b * di * time_points) ** (1/b)
+            production += np.random.normal(0, 50, n_time_points)
+            production = np.maximum(0, production)
+            
+            # Generate pressure profile
+            initial_pressure = 3500
+            pressure = initial_pressure - (production / qi) * 1000
+            pressure = np.maximum(1500, pressure)
+            
+            self.wells[well_name] = WellData(
+                name=well_name,
+                time_points=time_points,
+                production_rates=production,
+                pressures=pressure,
+                coordinates=(
+                    np.random.uniform(0, 10000),
+                    np.random.uniform(0, 10000),
+                    np.random.uniform(5000, 10000)
+                ),
+                completion_zones=list(range(1, np.random.randint(3, 8)))
+            )
         
-        self.production = pd.DataFrame(production_data)
-        
-        self.pressure = 4000 - 0.2 * self.time + np.random.normal(0, 50, n_days)
-        self.pressure = np.maximum(1000, self.pressure)
-        
-        self.wells = list(self.production.columns)
-        
-        print(f"Created sample data: {n_days} days, {n_wells} wells")
-        return True
-    
-    @property
-    def has_production_data(self) -> bool:
-        return not self.production.empty and len(self.production) > 0
-    
-    @property
-    def has_pressure_data(self) -> bool:
-        return len(self.pressure) > 0
-    
-    def summary(self) -> Dict[str, Any]:
-        summary_dict = {
-            'wells': len(self.wells),
-            'time_points': len(self.time),
-            'production_columns': list(self.production.columns),
-            'pressure_available': self.has_pressure_data
-        }
-        
-        if self.has_production_data:
-            summary_dict['production_range'] = {
-                'min': float(self.production.min().min()),
-                'max': float(self.production.max().max()),
-                'mean': float(self.production.mean().mean())
-            }
-        else:
-            summary_dict['production_range'] = {'min': 0, 'max': 0, 'mean': 0}
-        
-        if self.has_pressure_data:
-            summary_dict['pressure_range'] = {
-                'min': float(self.pressure.min()),
-                'max': float(self.pressure.max()),
-                'mean': float(self.pressure.mean())
-            }
-        else:
-            summary_dict['pressure_range'] = {'min': 0, 'max': 0, 'mean': 0}
-        
-        return summary_dict
+        self.grid_dimensions = (24, 25, 15)
+        self.porosity = np.random.uniform(0.08, 0.18, 9000)  # 24*25*15 = 9000
