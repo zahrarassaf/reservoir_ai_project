@@ -3,7 +3,6 @@ import pandas as pd
 import re
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
-from datetime import datetime
 import logging
 from collections import defaultdict
 
@@ -82,8 +81,6 @@ class ReservoirData:
             
         except Exception as e:
             logger.error(f"Error loading SPE9 file {file_path}: {e}")
-            import traceback
-            traceback.print_exc()
             return False
     
     def _parse_reservoir_properties(self, lines: List[str]) -> None:
@@ -170,7 +167,6 @@ class ReservoirData:
                                 'completions': [],
                                 'controls': {}
                             }
-                            logger.debug(f"Found well {well_name} at ({i_loc},{j_loc})")
                         except (ValueError, IndexError):
                             continue
         
@@ -200,80 +196,6 @@ class ReservoirData:
                                     'k_upper': k_upper,
                                     'k_lower': k_lower
                                 })
-                            except (ValueError, IndexError):
-                                continue
-        
-        in_wconprod = False
-        for i, line in enumerate(lines):
-            line_upper = line.upper()
-            if 'WCONPROD' in line_upper and not line.strip().startswith('--'):
-                in_wconprod = True
-                continue
-            
-            if in_wconprod:
-                line_clean = line.strip()
-                if line_clean.startswith('/'):
-                    break
-                if line_clean and not line_clean.startswith('--'):
-                    parts = line_clean.split()
-                    if len(parts) >= 4:
-                        well_name = parts[0].strip("'").strip()
-                        if well_name in wells_info or '*' in well_name:
-                            try:
-                                control_mode = parts[2] if len(parts) > 2 else 'OPEN'
-                                target_rate = float(parts[3]) if len(parts) > 3 else 1500.0
-                                bhp_limit = 1000.0
-                                
-                                for part in parts:
-                                    if part.replace('.', '').replace('-', '').isdigit():
-                                        val = float(part)
-                                        if 500 < val < 5000:
-                                            bhp_limit = val
-                                
-                                if '*' in well_name:
-                                    for wname in wells_info.keys():
-                                        if 'PRODU' in wname:
-                                            wells_info[wname]['controls'] = {
-                                                'mode': control_mode,
-                                                'target_rate': target_rate,
-                                                'bhp_limit': bhp_limit
-                                            }
-                                else:
-                                    wells_info[well_name]['controls'] = {
-                                        'mode': control_mode,
-                                        'target_rate': target_rate,
-                                        'bhp_limit': bhp_limit
-                                    }
-                            except (ValueError, IndexError):
-                                continue
-        
-        in_wconinje = False
-        for i, line in enumerate(lines):
-            if 'WCONINJE' in line and not line.strip().startswith('--'):
-                in_wconinje = True
-                continue
-            
-            if in_wconinje:
-                line_clean = line.strip()
-                if line_clean.startswith('/'):
-                    break
-                if line_clean and not line_clean.startswith('--'):
-                    parts = line_clean.split()
-                    if len(parts) >= 5:
-                        well_name = parts[0].strip("'").strip()
-                        if well_name in wells_info:
-                            try:
-                                injectant = parts[1].strip("'")
-                                control_mode = parts[2] if len(parts) > 2 else 'OPEN'
-                                target_rate = float(parts[3]) if len(parts) > 3 else 5000.0
-                                bhp_limit = float(parts[6]) if len(parts) > 6 else 4000.0
-                                
-                                wells_info[well_name]['controls'] = {
-                                    'mode': control_mode,
-                                    'target_rate': -target_rate,
-                                    'bhp_limit': bhp_limit,
-                                    'injectant': injectant
-                                }
                             except (ValueError, IndexError):
                                 continue
         
@@ -307,8 +229,6 @@ class ReservoirData:
                 coordinates=(x, y, z),
                 completion_zones=completion_zones
             )
-            
-            logger.debug(f"Created WellData for {well_name}")
     
     def _parse_simulation_schedule(self, lines: List[str]) -> Dict:
         schedule_data = {
@@ -424,10 +344,6 @@ class ReservoirData:
                 
                 min_bhp = 1000.0
                 pressures = np.maximum(min_bhp, pressures)
-                
-                if 'INJE' in self.wells:
-                    injection_support = 200.0 * (1 - np.exp(-time_points / 500))
-                    pressures = pressures + injection_support
             
             if n_points > 10:
                 from scipy.ndimage import gaussian_filter1d
@@ -440,51 +356,9 @@ class ReservoirData:
             well.time_points = time_points
             well.production_rates = rates
             well.pressures = pressures
-            
-            logger.debug(f"Generated profile for {well_name}: "
-                        f"qi={rates[0]:.0f} STB/day, "
-                        f"qf={rates[-1]:.0f} STB/day")
     
     def _parse_rock_fluid_properties(self, lines: List[str]) -> None:
         self._fluid_properties = {}
-        
-        for i, line in enumerate(lines):
-            if 'PVTW' in line and not line.strip().startswith('--'):
-                j = i + 1
-                while j < len(lines) and j < i + 5:
-                    prop_line = lines[j].strip()
-                    if prop_line and not prop_line.startswith('--'):
-                        parts = prop_line.split()
-                        if len(parts) >= 4:
-                            try:
-                                self._fluid_properties['water'] = {
-                                    'pref': float(parts[0]),
-                                    'bw': float(parts[1]),
-                                    'cw': float(parts[2]),
-                                    'viscw': float(parts[3])
-                                }
-                                break
-                            except ValueError:
-                                pass
-                    j += 1
-        
-        for i, line in enumerate(lines):
-            if 'ROCK' in line and not line.strip().startswith('--'):
-                j = i + 1
-                while j < len(lines) and j < i + 5:
-                    prop_line = lines[j].strip()
-                    if prop_line and not prop_line.startswith('--'):
-                        parts = prop_line.split()
-                        if len(parts) >= 2:
-                            try:
-                                self._fluid_properties['rock'] = {
-                                    'pref': float(parts[0]),
-                                    'cr': float(parts[1])
-                                }
-                                break
-                            except ValueError:
-                                pass
-                    j += 1
     
     def _create_synthetic_wells(self) -> None:
         logger.warning("No wells parsed from file, creating synthetic wells")
@@ -651,12 +525,7 @@ class ReservoirData:
             'production_range': production_range,
             'pressure_range': pressure_range,
             'total_production': total_cumulative,
-            'well_summaries': well_summaries,
-            'porosity_stats': {
-                'mean': float(np.mean(self.porosity)) if len(self.porosity) > 0 else 0,
-                'min': float(np.min(self.porosity)) if len(self.porosity) > 0 else 0,
-                'max': float(np.max(self.porosity)) if len(self.porosity) > 0 else 0
-            } if len(self.porosity) > 0 else None
+            'well_summaries': well_summaries
         }
     
     def get_well_dataframe(self) -> pd.DataFrame:
