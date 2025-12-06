@@ -1,418 +1,396 @@
-"""
-Reservoir Simulation Visualizer
-"""
-
 import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-from typing import Dict, Optional, List
+import matplotlib as mpl
+import seaborn as sns
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import numpy as np
+import pandas as pd
+from typing import Dict, List, Any
 import logging
 
 logger = logging.getLogger(__name__)
 
+mpl.rcParams['figure.figsize'] = [12, 8]
+mpl.rcParams['figure.dpi'] = 100
+mpl.rcParams['font.size'] = 10
+sns.set_style("whitegrid")
+sns.set_palette("husl")
 
-class ReservoirVisualizer:
-    """Create visualizations for reservoir simulation results"""
+class Visualizer:
+    def __init__(self):
+        self.figsize = (14, 10)
+        self.colors = {
+            'production': '#2E86AB',
+            'revenue': '#A23B72',
+            'cash_flow': '#F18F01',
+            'npv': '#73AB84',
+            'decline': '#C73E1D',
+            'water': '#3A86FF',
+            'gas': '#FF9B71'
+        }
     
-    def __init__(self, data, results):
-        """
-        Initialize visualizer
-        
-        Parameters
-        ----------
-        data : ReservoirData
-            Input data
-        results : Dict
-            Simulation results
-        """
-        self.data = data
-        self.results = results
-        
-        # Set plotting style
-        plt.style.use('seaborn-v0_8-darkgrid')
-        self.colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', 
-                      '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
-    
-    def create_dashboard(self, save_path: Optional[str] = None):
-        """Create comprehensive dashboard"""
-        fig, axes = plt.subplots(3, 3, figsize=(18, 12))
-        
-        # Production forecast
-        self._plot_production_forecast(axes[0, 0])
-        
-        # Pressure profile
-        self._plot_pressure_profile(axes[0, 1])
-        
-        # Economic analysis
-        self._plot_economic_analysis(axes[0, 2])
-        
-        # Decline curves
-        self._plot_decline_curves(axes[1, 0])
-        
-        # Petrophysical properties
-        if not self.data.petrophysical.empty:
-            self._plot_petrophysical(axes[1, 1])
-        
-        # Material balance
-        self._plot_material_balance(axes[1, 2])
-        
-        # Sensitivity analysis
-        self._plot_sensitivity(axes[2, 0])
-        
-        # Well production comparison
-        self._plot_well_comparison(axes[2, 1])
-        
-        # Recovery factor
-        self._plot_recovery_factor(axes[2, 2])
-        
-        plt.suptitle('Reservoir Simulation Dashboard', fontsize=16, fontweight='bold')
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            logger.info(f"Dashboard saved to {save_path}")
-        
-        plt.show()
-    
-    def _plot_production_forecast(self, ax):
-        """Plot production forecast"""
-        if 'production_forecast' not in self.results:
-            ax.text(0.5, 0.5, 'No production forecast data', 
-                   ha='center', va='center', transform=ax.transAxes)
-            ax.set_title('Production Forecast')
-            return
-        
-        forecast = self.results['production_forecast']
-        time = np.array(forecast['time'])
-        total_prod = np.array(forecast['total_production'])
-        
-        # Find historical/forecast boundary
-        hist_end = len(self.data.time) if hasattr(self.data, 'time') else 0
-        
-        # Plot
-        time_years = time / 365
-        ax.plot(time_years[:hist_end], total_prod[:hist_end], 
-               'b-', linewidth=2, label='Historical')
-        ax.plot(time_years[hist_end:], total_prod[hist_end:], 
-               'r--', linewidth=2, label='Forecast')
-        
-        # Add vertical line at forecast start
-        if hist_end < len(time_years):
-            ax.axvline(x=time_years[hist_end], color='k', 
-                      linestyle=':', alpha=0.5, linewidth=1)
-        
-        ax.set_xlabel('Time (Years)')
-        ax.set_ylabel('Production Rate (bbl/day)')
-        ax.set_title('Production Forecast')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-    
-    def _plot_pressure_profile(self, ax):
-        """Plot pressure profile"""
-        if 'pressure_forecast' not in self.results:
-            ax.text(0.5, 0.5, 'No pressure data', 
-                   ha='center', va='center', transform=ax.transAxes)
-            ax.set_title('Pressure Profile')
-            return
-        
-        pressure_data = self.results['pressure_forecast']
-        time = np.array(pressure_data['time'])
-        pressure = np.array(pressure_data['pressure'])
-        
-        # Find historical/forecast boundary
-        hist_end = len(self.data.time) if hasattr(self.data, 'time') else 0
-        
-        # Plot
-        time_years = time / 365
-        ax.plot(time_years[:hist_end], pressure[:hist_end], 
-               'g-', linewidth=2, label='Historical')
-        ax.plot(time_years[hist_end:], pressure[hist_end:], 
-               'm--', linewidth=2, label='Forecast')
-        
-        ax.set_xlabel('Time (Years)')
-        ax.set_ylabel('Pressure (psi)')
-        ax.set_title('Pressure Profile')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-    
-    def _plot_economic_analysis(self, ax):
-        """Plot economic analysis"""
-        if 'economic_analysis' not in self.results:
-            ax.text(0.5, 0.5, 'No economic data', 
-                   ha='center', va='center', transform=ax.transAxes)
-            ax.set_title('Economic Analysis')
-            return
-        
-        econ = self.results['economic_analysis']
-        cash_flow = np.array(econ['cumulative_cash_flow'])
-        
-        if 'production_forecast' in self.results:
-            time = np.array(self.results['production_forecast']['time'])
-            time_years = time / 365
-            
-            ax.plot(time_years, cash_flow / 1e6, 'b-', linewidth=2)
-            
-            # Add NPV line
-            npv = econ.get('npv', 0)
-            ax.axhline(y=npv/1e6, color='r', linestyle='--', 
-                      label=f'NPV: ${npv/1e6:.1f}M')
-            
-            # Add payback period
-            payback = econ.get('payback_period')
-            if payback:
-                ax.axvline(x=payback, color='g', linestyle=':', 
-                          label=f'Payback: {payback:.1f} years')
-        
-        ax.set_xlabel('Time (Years)')
-        ax.set_ylabel('Cumulative Cash Flow (Million USD)')
-        ax.set_title('Economic Analysis')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-    
-    def _plot_decline_curves(self, ax):
-        """Plot decline curves"""
-        if 'decline_analysis' not in self.results:
-            ax.text(0.5, 0.5, 'No decline analysis data', 
-                   ha='center', va='center', transform=ax.transAxes)
-            ax.set_title('Decline Curve Analysis')
-            return
-        
-        decline_data = self.results['decline_analysis']
-        
-        for i, (well, data) in enumerate(list(decline_data.items())[:4]):  # Plot first 4 wells
-            if 'exponential' in data:
-                exp = data['exponential']
-                ax.semilogy([i], [exp['initial_rate']], 'o', 
-                           color=self.colors[i % len(self.colors)], 
-                           label=f'{well}: D={exp["decline_rate"]:.3f}/yr')
-        
-        ax.set_xlabel('Well')
-        ax.set_ylabel('Initial Rate (bbl/day) - Log Scale')
-        ax.set_title('Decline Curve Analysis')
-        ax.legend()
-        ax.grid(True, alpha=0.3, which='both')
-    
-    def _plot_petrophysical(self, ax):
-        """Plot petrophysical properties"""
-        if self.data.petrophysical.empty:
-            ax.text(0.5, 0.5, 'No petrophysical data', 
-                   ha='center', va='center', transform=ax.transAxes)
-            ax.set_title('Petrophysical Properties')
-            return
-        
-        petro = self.data.petrophysical
-        x = range(len(petro))
-        width = 0.2
-        
-        properties = ['porosity', 'permeability', 'netthickness', 'watersaturation']
-        colors = self.colors[:4]
-        
-        for i, (prop, color) in enumerate(zip(properties, colors)):
-            if prop in petro.columns:
-                positions = [pos - width*(1.5 - i) for pos in x]
-                ax.bar(positions, petro[prop], width, 
-                      label=prop.capitalize(), color=color, alpha=0.7)
-        
-        ax.set_xlabel('Layer')
-        ax.set_ylabel('Property Value')
-        ax.set_title('Petrophysical Properties by Layer')
-        ax.legend()
-        ax.grid(True, alpha=0.3, axis='y')
-    
-    def _plot_material_balance(self, ax):
-        """Plot material balance"""
-        if 'material_balance' not in self.results:
-            ax.text(0.5, 0.5, 'No material balance data', 
-                   ha='center', va='center', transform=ax.transAxes)
-            ax.set_title('Material Balance')
-            return
-        
-        mb = self.results['material_balance']
-        
-        if 'regression' in mb:
-            reg = mb['regression']
-            ax.text(0.5, 0.5, 
-                   f'OOIP: {mb.get("ooip_stb", 0):,.0f} STB\n'
-                   f'R²: {reg.get("r_squared", 0):.3f}',
-                   ha='center', va='center', transform=ax.transAxes,
-                   fontsize=12, bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-        
-        ax.set_title('Material Balance Analysis')
-        ax.axis('off')
-    
-    def _plot_sensitivity(self, ax):
-        """Plot sensitivity analysis"""
-        if 'sensitivity_analysis' not in self.results:
-            ax.text(0.5, 0.5, 'No sensitivity data', 
-                   ha='center', va='center', transform=ax.transAxes)
-            ax.set_title('Sensitivity Analysis')
-            return
-        
-        sensitivity = self.results['sensitivity_analysis']
-        
-        # Get parameters (exclude 'key_parameters')
-        params = [p for p in sensitivity.keys() if p != 'key_parameters']
-        
-        if len(params) > 0:
-            param_names = params[:4]  # Show first 4 parameters
-            base_npv = sensitivity[param_names[0]]['tornado_data']['base'] / 1e6
-            
-            low_vals = []
-            high_vals = []
-            
-            for param in param_names:
-                data = sensitivity[param]['tornado_data']
-                low_vals.append(data['low'] / 1e6 - base_npv)
-                high_vals.append(data['high'] / 1e6 - base_npv)
-            
-            y_pos = np.arange(len(param_names))
-            
-            ax.barh(y_pos, low_vals, height=0.4, color='red', alpha=0.6, label='Low')
-            ax.barh(y_pos, high_vals, height=0.4, color='green', alpha=0.6, label='High')
-            
-            ax.set_yticks(y_pos)
-            ax.set_yticklabels([p.replace('_', ' ').title() for p in param_names])
-            ax.set_xlabel('NPV Change (Million USD)')
-            ax.set_title('Sensitivity Analysis')
-            ax.legend()
-            ax.grid(True, alpha=0.3, axis='x')
-    
-    def _plot_well_comparison(self, ax):
-        """Plot well production comparison"""
-        if not self.data.production.empty:
-            # Plot first 4 wells
-            wells_to_plot = self.data.production.columns[:4]
-            
-            for i, well in enumerate(wells_to_plot):
-                production = self.data.production[well].values[:365]  # First year
-                ax.plot(np.arange(len(production)), production, 
-                       color=self.colors[i % len(self.colors)], 
-                       label=well, alpha=0.7)
-            
-            ax.set_xlabel('Days')
-            ax.set_ylabel('Production Rate (bbl/day)')
-            ax.set_title('Well Production Comparison')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-    
-    def _plot_recovery_factor(self, ax):
-        """Plot recovery factor"""
-        if ('production_forecast' in self.results and 
-            'material_balance' in self.results):
-            
-            prod = self.results['production_forecast']
-            mb = self.results['material_balance']
-            
-            cumulative_prod = np.array(prod['cumulative_production'])
-            ooip = mb.get('ooip_stb', 1)
-            
-            if ooip > 0:
-                recovery_factor = cumulative_prod / ooip * 100
-                time_years = np.array(prod['time']) / 365
-                
-                ax.plot(time_years, recovery_factor, 'b-', linewidth=2)
-                
-                final_rf = recovery_factor[-1]
-                ax.annotate(f'Final RF: {final_rf:.1f}%',
-                           xy=(0.05, 0.95), xycoords='axes fraction',
-                           fontsize=10, verticalalignment='top',
-                           bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-                
-                ax.set_xlabel('Time (Years)')
-                ax.set_ylabel('Recovery Factor (%)')
-                ax.set_title('Recovery Factor Profile')
-                ax.grid(True, alpha=0.3)
-                return
-        
-        ax.text(0.5, 0.5, 'No recovery factor data', 
-               ha='center', va='center', transform=ax.transAxes)
-        ax.set_title('Recovery Factor')
-    
-    def create_interactive_dashboard(self, save_path: Optional[str] = None):
-        """Create interactive Plotly dashboard"""
-        if 'production_forecast' not in self.results:
-            logger.warning("No forecast data for interactive dashboard")
-            return
-        
-        # Create subplots
+    def create_comprehensive_dashboard(self, results: Dict, dataset_id: str = "") -> go.Figure:
         fig = make_subplots(
-            rows=2, cols=3,
-            subplot_titles=('Production Forecast', 'Pressure Profile', 
-                          'Economic Analysis', 'Decline Curves', 
-                          'Recovery Factor', 'Sensitivity Analysis'),
-            vertical_spacing=0.15,
-            horizontal_spacing=0.1
+            rows=3, cols=3,
+            subplot_titles=(
+                'Production Forecast', 'Economic Cash Flow', 'NPV Sensitivity',
+                'Decline Curve Analysis', 'Cumulative Production', 'Reservoir Performance',
+                'Economic Metrics', 'Uncertainty Analysis', 'Key Indicators'
+            ),
+            specs=[
+                [{'type': 'scatter'}, {'type': 'scatter'}, {'type': 'scatter'}],
+                [{'type': 'scatter'}, {'type': 'scatter'}, {'type': 'scatter'}],
+                [{'type': 'bar'}, {'type': 'scatter'}, {'type': 'table'}]
+            ],
+            vertical_spacing=0.08,
+            horizontal_spacing=0.08
         )
         
-        # Production forecast
-        forecast = self.results['production_forecast']
-        time = np.array(forecast['time'])
-        total_prod = np.array(forecast['total_production'])
-        hist_end = len(self.data.time)
+        prod_forecast = results.get('production_forecast', {})
+        econ_results = results.get('economic_evaluation', {})
+        decline_results = results.get('decline_analysis', {})
+        uncertainty = results.get('uncertainty_analysis', {})
+        kpis = results.get('key_performance_indicators', {})
         
-        time_years = time / 365
-        
-        fig.add_trace(
-            go.Scatter(x=time_years[:hist_end], y=total_prod[:hist_end],
-                      mode='lines', name='Historical',
-                      line=dict(color='blue', width=2)),
-            row=1, col=1
-        )
-        
-        fig.add_trace(
-            go.Scatter(x=time_years[hist_end:], y=total_prod[hist_end:],
-                      mode='lines', name='Forecast',
-                      line=dict(color='red', width=2, dash='dash')),
-            row=1, col=1
-        )
-        
-        # Pressure profile
-        if 'pressure_forecast' in self.results:
-            pressure_data = self.results['pressure_forecast']
-            pressure = np.array(pressure_data['pressure'])
-            
+        # 1. Production Forecast
+        if 'field_rate' in prod_forecast:
+            time_years = prod_forecast['time'] / 365
             fig.add_trace(
-                go.Scatter(x=time_years, y=pressure,
-                          mode='lines', name='Pressure',
-                          line=dict(color='green', width=2)),
+                go.Scatter(
+                    x=time_years,
+                    y=prod_forecast['field_rate'],
+                    mode='lines',
+                    name='Field Rate',
+                    line=dict(color=self.colors['production'], width=2),
+                    fill='tozeroy'
+                ),
+                row=1, col=1
+            )
+        
+        # 2. Economic Cash Flow
+        if 'annual_cash_flows' in econ_results:
+            years = list(range(1, len(econ_results['annual_cash_flows']) + 1))
+            fig.add_trace(
+                go.Bar(
+                    x=years,
+                    y=econ_results['annual_cash_flows'],
+                    name='Annual Cash Flow',
+                    marker_color=self.colors['cash_flow']
+                ),
                 row=1, col=2
             )
         
-        # Economic analysis
-        if 'economic_analysis' in self.results:
-            econ = self.results['economic_analysis']
-            cash_flow = np.array(econ['cumulative_cash_flow'])
+        # 3. NPV Sensitivity
+        if 'tornado_analysis' in uncertainty:
+            tornado_data = uncertainty['tornado_analysis']
+            variables = [d['variable'] for d in tornado_data]
+            low_impacts = [d['low_impact'] / 1e6 for d in tornado_data]
+            high_impacts = [d['high_impact'] / 1e6 for d in tornado_data]
             
             fig.add_trace(
-                go.Scatter(x=time_years, y=cash_flow / 1e6,
-                          mode='lines', name='Cash Flow',
-                          line=dict(color='purple', width=2)),
+                go.Bar(
+                    y=variables,
+                    x=low_impacts,
+                    name='Low Impact',
+                    orientation='h',
+                    marker_color='#FF6B6B'
+                ),
+                row=1, col=3
+            )
+            
+            fig.add_trace(
+                go.Bar(
+                    y=variables,
+                    x=high_impacts,
+                    name='High Impact',
+                    orientation='h',
+                    marker_color='#4ECDC4'
+                ),
                 row=1, col=3
             )
         
-        # Update layout
-        fig.update_layout(
-            title_text='Reservoir Simulation Dashboard',
-            title_font_size=20,
-            showlegend=True,
-            height=800,
-            template='plotly_white'
+        # 4. Decline Curve Analysis
+        if decline_results:
+            sample_wells = list(decline_results.keys())[:3]
+            for i, well_name in enumerate(sample_wells):
+                params = decline_results[well_name]
+                time_range = np.linspace(0, 3650, 100)
+                
+                if params.get('method') == 'exponential':
+                    rates = params['qi'] * np.exp(-params['di'] * time_range)
+                else:
+                    rates = params['qi'] / (1 + params['di'] * time_range)
+                
+                fig.add_trace(
+                    go.Scatter(
+                        x=time_range / 365,
+                        y=rates,
+                        mode='lines',
+                        name=f'{well_name}',
+                        line=dict(width=1.5),
+                        showlegend=True if i == 0 else False
+                    ),
+                    row=2, col=1
+                )
+        
+        # 5. Cumulative Production
+        if 'field_cumulative' in prod_forecast:
+            time_years = prod_forecast['time'] / 365
+            fig.add_trace(
+                go.Scatter(
+                    x=time_years,
+                    y=prod_forecast['field_cumulative'] / 1e6,
+                    mode='lines',
+                    name='Cumulative',
+                    line=dict(color=self.colors['production'], width=3),
+                    fill='tozeroy'
+                ),
+                row=2, col=2
+            )
+        
+        # 6. Economic Metrics
+        metrics = ['NPV', 'IRR', 'ROI', 'Payback']
+        values = [
+            econ_results.get('npv', 0) / 1e6,
+            econ_results.get('irr', 0),
+            econ_results.get('roi', 0),
+            min(econ_results.get('payback_period', 99), 20)
+        ]
+        
+        colors = ['#73AB84', '#A23B72', '#F18F01', '#2E86AB']
+        
+        fig.add_trace(
+            go.Bar(
+                x=metrics,
+                y=values,
+                marker_color=colors,
+                text=[f'${values[0]:.1f}M' if i == 0 else f'{v:.1f}%' if i < 3 else f'{v:.1f}y' 
+                     for i, v in enumerate(values)],
+                textposition='auto'
+            ),
+            row=3, col=1
         )
         
-        # Update axes labels
-        fig.update_xaxes(title_text='Time (Years)', row=1, col=1)
-        fig.update_yaxes(title_text='Production (bbl/day)', row=1, col=1)
+        # Update layout
+        fig.update_layout(
+            title_text=f"Reservoir Simulation Dashboard - {dataset_id[:20]}",
+            height=1000,
+            showlegend=True,
+            template="plotly_white"
+        )
         
-        fig.update_xaxes(title_text='Time (Years)', row=1, col=2)
-        fig.update_yaxes(title_text='Pressure (psi)', row=1, col=2)
+        fig.update_xaxes(title_text="Years", row=1, col=1)
+        fig.update_yaxes(title_text="Rate (bpd)", row=1, col=1)
         
-        fig.update_xaxes(title_text='Time (Years)', row=1, col=3)
-        fig.update_yaxes(title_text='Cash Flow (Million USD)', row=1, col=3)
+        fig.update_xaxes(title_text="Year", row=1, col=2)
+        fig.update_yaxes(title_text="Cash Flow ($M)", row=1, col=2)
         
-        if save_path:
-            fig.write_html(save_path)
-            logger.info(f"Interactive dashboard saved to {save_path}")
+        fig.update_xaxes(title_text="NPV Impact ($M)", row=1, col=3)
+        fig.update_yaxes(title_text="Variable", row=1, col=3)
         
-        fig.show()
+        fig.update_xaxes(title_text="Years", row=2, col=1)
+        fig.update_yaxes(title_text="Rate (bpd)", row=2, col=1)
+        
+        fig.update_xaxes(title_text="Years", row=2, col=2)
+        fig.update_yaxes(title_text="Cumulative (MMbbl)", row=2, col=2)
+        
+        fig.update_xaxes(title_text="Metric", row=3, col=1)
+        fig.update_yaxes(title_text="Value", row=3, col=1)
+        
+        return fig
+    
+    def plot_production_profiles(self, production_forecast: Dict, top_n_wells: int = 5):
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        
+        # Field production rate
+        if 'field_rate' in production_forecast:
+            time_years = production_forecast['time'] / 365
+            axes[0, 0].plot(time_years, production_forecast['field_rate'], 
+                          color=self.colors['production'], linewidth=2)
+            axes[0, 0].set_title('Field Production Rate')
+            axes[0, 0].set_xlabel('Years')
+            axes[0, 0].set_ylabel('Rate (bpd)')
+            axes[0, 0].grid(True, alpha=0.3)
+            axes[0, 0].fill_between(time_years, production_forecast['field_rate'], 
+                                   alpha=0.2, color=self.colors['production'])
+        
+        # Annual production
+        if 'annual_production' in production_forecast:
+            years = np.arange(1, len(production_forecast['annual_production']) + 1)
+            axes[0, 1].bar(years, production_forecast['annual_production'] / 1e6, 
+                          color=self.colors['production'], alpha=0.7)
+            axes[0, 1].set_title('Annual Production')
+            axes[0, 1].set_xlabel('Year')
+            axes[0, 1].set_ylabel('Production (MMbbl)')
+            axes[0, 1].grid(True, alpha=0.3)
+        
+        # Cumulative production
+        if 'field_cumulative' in production_forecast:
+            time_years = production_forecast['time'] / 365
+            axes[1, 0].plot(time_years, production_forecast['field_cumulative'] / 1e6, 
+                          color=self.colors['production'], linewidth=2)
+            axes[1, 0].set_title('Cumulative Production')
+            axes[1, 0].set_xlabel('Years')
+            axes[1, 0].set_ylabel('Cumulative (MMbbl)')
+            axes[1, 0].grid(True, alpha=0.3)
+            axes[1, 0].fill_between(time_years, production_forecast['field_cumulative'] / 1e6, 
+                                   alpha=0.2, color=self.colors['production'])
+        
+        # Well forecasts
+        if 'well_forecasts' in production_forecast:
+            well_forecasts = production_forecast['well_forecasts']
+            top_wells = sorted(well_forecasts.keys(), 
+                             key=lambda x: well_forecasts[x]['eur'], 
+                             reverse=True)[:top_n_wells]
+            
+            for well_name in top_wells:
+                forecast = well_forecasts[well_name]
+                time_years = forecast['time'] / 365
+                axes[1, 1].plot(time_years, forecast['rate'], 
+                              label=well_name, alpha=0.7, linewidth=1.5)
+            
+            axes[1, 1].set_title(f'Top {top_n_wells} Wells')
+            axes[1, 1].set_xlabel('Years')
+            axes[1, 1].set_ylabel('Rate (bpd)')
+            axes[1, 1].grid(True, alpha=0.3)
+            axes[1, 1].legend(fontsize=9)
+        
+        plt.tight_layout()
+        return fig
+    
+    def plot_economic_results(self, economic_results: Dict):
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        
+        # Cash flow waterfall
+        if 'cash_flows' in economic_results:
+            cash_flows = economic_results['cash_flows']
+            years = list(range(len(cash_flows)))
+            
+            colors = ['#FF6B6B' if cf < 0 else '#4ECDC4' for cf in cash_flows]
+            axes[0, 0].bar(years, np.array(cash_flows) / 1e6, color=colors, alpha=0.7)
+            axes[0, 0].set_title('Cash Flow Timeline')
+            axes[0, 0].set_xlabel('Year')
+            axes[0, 0].set_ylabel('Cash Flow ($M)')
+            axes[0, 0].axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+            axes[0, 0].grid(True, alpha=0.3)
+        
+        # NPV sensitivity
+        if 'tornado_analysis' in economic_results.get('uncertainty_analysis', {}):
+            tornado_data = economic_results['uncertainty_analysis']['tornado_analysis']
+            variables = [d['variable'].replace('_', ' ').title() for d in tornado_data]
+            low_impacts = [d['low_impact'] / 1e6 for d in tornado_data]
+            high_impacts = [d['high_impact'] / 1e6 for d in tornado_data]
+            
+            y_pos = np.arange(len(variables))
+            axes[0, 1].barh(y_pos - 0.2, low_impacts, 0.4, 
+                           label='Low Case', color='#FF6B6B', alpha=0.7)
+            axes[0, 1].barh(y_pos + 0.2, high_impacts, 0.4, 
+                           label='High Case', color='#4ECDC4', alpha=0.7)
+            axes[0, 1].set_yticks(y_pos)
+            axes[0, 1].set_yticklabels(variables)
+            axes[0, 1].set_title('NPV Sensitivity Analysis')
+            axes[0, 1].set_xlabel('NPV Impact ($M)')
+            axes[0, 1].legend()
+            axes[0, 1].grid(True, alpha=0.3)
+        
+        # Economic metrics radar chart
+        metrics = ['NPV', 'IRR', 'ROI', 'Payback', 'Break-even']
+        values = [
+            min(economic_results.get('npv', 0) / 1e6, 100),
+            min(economic_results.get('irr', 0), 50),
+            min(economic_results.get('roi', 0), 200),
+            min(economic_results.get('payback_period', 99), 10),
+            min(economic_results.get('break_even_price', 0) / 10, 10)
+        ]
+        
+        angles = np.linspace(0, 2 * np.pi, len(metrics), endpoint=False).tolist()
+        values += values[:1]
+        angles += angles[:1]
+        
+        axes[1, 0] = plt.subplot(2, 2, 3, projection='polar')
+        axes[1, 0].plot(angles, values, 'o-', linewidth=2, color=self.colors['npv'])
+        axes[1, 0].fill(angles, values, alpha=0.25, color=self.colors['npv'])
+        axes[1, 0].set_thetagrids(np.degrees(angles[:-1]), metrics)
+        axes[1, 0].set_title('Economic Performance Radar')
+        axes[1, 0].grid(True)
+        
+        # Scenario analysis
+        if 'scenario_analysis' in economic_results.get('uncertainty_analysis', {}):
+            scenarios = economic_results['uncertainty_analysis']['scenario_analysis']
+            scenario_names = list(scenarios.keys())
+            npv_values = [scenarios[name]['npv'] / 1e6 for name in scenario_names]
+            
+            colors = ['#FF6B6B', '#F18F01', '#4ECDC4']
+            axes[1, 1].bar(scenario_names, npv_values, color=colors, alpha=0.7)
+            axes[1, 1].set_title('Scenario Analysis')
+            axes[1, 1].set_xlabel('Scenario')
+            axes[1, 1].set_ylabel('NPV ($M)')
+            axes[1, 1].grid(True, alpha=0.3)
+            
+            for i, v in enumerate(npv_values):
+                axes[1, 1].text(i, v + 0.1, f'${v:.1f}M', ha='center')
+        
+        plt.tight_layout()
+        return fig
+    
+    def plot_reservoir_performance(self, reservoir_props: Dict, decline_curves: Dict):
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        
+        # Recovery factor distribution
+        if 'recovery_factor' in reservoir_props:
+            rf = reservoir_props['recovery_factor'] * 100
+            axes[0, 0].bar(['Actual'], [rf], color=self.colors['production'], alpha=0.7)
+            axes[0, 0].axhline(y=25, color='red', linestyle='--', alpha=0.5, label='Typical RF')
+            axes[0, 0].axhline(y=40, color='green', linestyle='--', alpha=0.5, label='Good RF')
+            axes[0, 0].set_title('Recovery Factor')
+            axes[0, 0].set_ylabel('Recovery (%)')
+            axes[0, 0].legend()
+            axes[0, 0].grid(True, alpha=0.3)
+        
+        # Decline parameters distribution
+        if decline_curves:
+            qi_values = [d['qi'] for d in decline_curves.values()]
+            di_values = [d['di'] * 1000 for d in decline_curves.values()]
+            
+            axes[0, 1].hist(qi_values, bins=15, alpha=0.7, color=self.colors['decline'])
+            axes[0, 1].set_title('Initial Rate Distribution')
+            axes[0, 1].set_xlabel('Initial Rate (bpd)')
+            axes[0, 1].set_ylabel('Frequency')
+            axes[0, 1].grid(True, alpha=0.3)
+        
+        # Decline rate vs initial rate
+        if decline_curves:
+            qi_values = [d['qi'] for d in decline_curves.values()]
+            di_values = [d['di'] * 1000 for d in decline_curves.values()]
+            
+            scatter = axes[1, 0].scatter(qi_values, di_values, 
+                                        c=[d.get('r2', 0) for d in decline_curves.values()],
+                                        cmap='viridis', s=100, alpha=0.7)
+            axes[1, 0].set_title('Decline Characteristics')
+            axes[1, 0].set_xlabel('Initial Rate (bpd)')
+            axes[1, 0].set_ylabel('Decline Rate (per 1000 days)')
+            axes[1, 0].grid(True, alpha=0.3)
+            plt.colorbar(scatter, ax=axes[1, 0], label='R²')
+        
+        # Reserve distribution
+        if decline_curves and 'well_forecasts' in reservoir_props.get('production_forecast', {}):
+            eur_values = [f['eur'] / 1e6 for f in 
+                         reservoir_props['production_forecast']['well_forecasts'].values()]
+            
+            axes[1, 1].hist(eur_values, bins=15, alpha=0.7, color=self.colors['gas'])
+            axes[1, 1].set_title('EUR Distribution per Well')
+            axes[1, 1].set_xlabel('EUR (MMbbl)')
+            axes[1, 1].set_ylabel('Frequency')
+            axes[1, 1].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        return fig
+    
+    def save_dashboard(self, fig: go.Figure, filename: str = "dashboard.html"):
+        fig.write_html(filename)
+        logger.info(f"Dashboard saved to {filename}")
+    
+    def save_matplotlib_figure(self, fig, filename: str = "figure.png"):
+        fig.savefig(filename, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        logger.info(f"Figure saved to {filename}")
