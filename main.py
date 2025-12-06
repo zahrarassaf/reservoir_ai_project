@@ -1,3 +1,4 @@
+# main.py - VERSION WITH FIXED IMPORTS
 import sys
 import os
 import logging
@@ -7,9 +8,42 @@ import numpy as np
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from src.data_loader import DataLoader
-from src.economics import ReservoirSimulator, SimulationParameters
-from src.visualizer import Visualizer
+# Import directly from modules, not from src package
+try:
+    from src.data_loader import DataLoader
+    from src.economics import ReservoirSimulator, SimulationParameters
+    # Try to import visualizer if exists
+    try:
+        from src.visualizer import Visualizer
+        VISUALIZER_AVAILABLE = True
+    except ImportError:
+        VISUALIZER_AVAILABLE = False
+        print("Visualizer not available, continuing without visualizations")
+except ImportError as e:
+    print(f"Import error: {e}")
+    print("Trying alternative import structure...")
+    
+    # Alternative: import modules directly
+    import importlib.util
+    import sys
+    
+    # Import data_loader
+    spec = importlib.util.spec_from_file_location("data_loader", "src/data_loader.py")
+    data_loader_module = importlib.util.module_from_spec(spec)
+    sys.modules["data_loader"] = data_loader_module
+    spec.loader.exec_module(data_loader_module)
+    DataLoader = data_loader_module.DataLoader
+    
+    # Import economics
+    spec = importlib.util.spec_from_file_location("economics", "src/economics.py")
+    economics_module = importlib.util.module_from_spec(spec)
+    sys.modules["economics"] = economics_module
+    spec.loader.exec_module(economics_module)
+    ReservoirSimulator = economics_module.ReservoirSimulator
+    SimulationParameters = economics_module.SimulationParameters
+    
+    VISUALIZER_AVAILABLE = False
+
 from prettytable import PrettyTable
 
 def setup_logging():
@@ -33,14 +67,36 @@ def get_simulation_parameters():
         forecast_years = int(input(f"Forecast years (default: 10): ") or "10")
         oil_price = float(input(f"Oil price USD/bbl (default: 75.0): ") or "75.0")
         operating_cost = float(input(f"Operating cost USD/bbl (default: 18.0): ") or "18.0")
-        discount_rate = float(input(f"Discount rate % (default: 10.0): ") or "10.0") / 100
+        
+        # Ask for discount rate
+        discount_rate_input = input(f"Discount rate % (default: 10.0): ") or "10.0"
+        discount_rate = float(discount_rate_input) / 100
         
         # Optional advanced parameters
-        print("\nAdvanced parameters (press Enter for defaults):")
-        capex_per_well = float(input(f"CAPEX per well $M (default: 1.0): ") or "1.0") * 1_000_000
-        fixed_opex = float(input(f"Fixed annual OPEX $M (default: 0.5): ") or "0.5") * 1_000_000
-        tax_rate = float(input(f"Tax rate % (default: 30.0): ") or "30.0") / 100
-        royalty_rate = float(input(f"Royalty rate % (default: 12.5): ") or "12.5") / 100
+        print("\n[Optional] Advanced parameters (press Enter for defaults):")
+        try:
+            capex_input = input(f"CAPEX per well $M (default: 1.0): ") or "1.0"
+            capex_per_well = float(capex_input) * 1_000_000
+        except:
+            capex_per_well = 1_000_000
+            
+        try:
+            fixed_opex_input = input(f"Fixed annual OPEX $M (default: 0.5): ") or "0.5"
+            fixed_annual_opex = float(fixed_opex_input) * 1_000_000
+        except:
+            fixed_annual_opex = 500_000
+            
+        try:
+            tax_rate_input = input(f"Tax rate % (default: 30.0): ") or "30.0"
+            tax_rate = float(tax_rate_input) / 100
+        except:
+            tax_rate = 0.30
+            
+        try:
+            royalty_rate_input = input(f"Royalty rate % (default: 12.5): ") or "12.5"
+            royalty_rate = float(royalty_rate_input) / 100
+        except:
+            royalty_rate = 0.125
         
         return {
             'forecast_years': forecast_years,
@@ -48,7 +104,7 @@ def get_simulation_parameters():
             'operating_cost': operating_cost,
             'discount_rate': discount_rate,
             'capex_per_well': capex_per_well,
-            'fixed_annual_opex': fixed_opex,
+            'fixed_annual_opex': fixed_annual_opex,
             'tax_rate': tax_rate,
             'royalty_rate': royalty_rate
         }
@@ -71,7 +127,7 @@ def run_single_simulation(dataset_id: str, reservoir_data: Dict, params: Dict) -
     logger = logging.getLogger(__name__)
     
     print(f"\n{'='*60}")
-    print(f"SIMULATING: {dataset_id}")
+    print(f"SIMULATING: {dataset_id[:30]}")
     print(f"{'='*60}")
     
     try:
@@ -83,10 +139,27 @@ def run_single_simulation(dataset_id: str, reservoir_data: Dict, params: Dict) -
         print(f"  • Wells: {wells_count}")
         print(f"  • Grid: {grid_dims}")
         
-        if 'production_summary' in reservoir_data:
-            prod = reservoir_data['production_summary']
-            print(f"  • Max rate: {prod.get('max_rate', 0):.1f} STB/day")
-            print(f"  • Total production: {prod.get('total_production', 0):,.0f} bbl")
+        # Try to get production summary
+        total_production = 0
+        max_rate = 0
+        
+        if 'wells' in reservoir_data:
+            for well_name, well in reservoir_data['wells'].items():
+                if hasattr(well, 'production_rates'):
+                    rates = well.production_rates
+                    if len(rates) > 0:
+                        max_rate = max(max_rate, np.max(rates))
+                        
+                        # Calculate approximate production
+                        if hasattr(well, 'time_points'):
+                            time_points = well.time_points
+                            if len(time_points) >= 2:
+                                avg_rate = np.mean(rates)
+                                time_span = time_points[-1] - time_points[0]
+                                total_production += avg_rate * time_span
+        
+        print(f"  • Max rate: {max_rate:.1f} STB/day")
+        print(f"  • Total production: {total_production:,.0f} bbl")
         
         # Create simulation parameters
         sim_params = SimulationParameters(
@@ -109,13 +182,19 @@ def run_single_simulation(dataset_id: str, reservoir_data: Dict, params: Dict) -
         economic_results = results.get('economic_analysis', {})
         
         print(f"\nECONOMIC RESULTS:")
-        print(f"  • NPV: ${economic_results.get('npv', 0):.2f}M")
         
+        # Format NPV
+        npv_value = economic_results.get('npv', 0)
+        npv_str = f"${npv_value:+.2f}M"
+        print(f"  • NPV: {npv_str}")
+        
+        # Format IRR
         irr_value = economic_results.get('irr', 0)
         if irr_value > 100:  # Cap unrealistic IRR
             irr_value = 100
         print(f"  • IRR: {irr_value:.1f}%")
         
+        # Format ROI
         roi_value = economic_results.get('roi', 0)
         if roi_value > 500:  # Cap unrealistic ROI
             roi_value = 500
@@ -123,26 +202,21 @@ def run_single_simulation(dataset_id: str, reservoir_data: Dict, params: Dict) -
             roi_value = -100
         print(f"  • ROI: {roi_value:.1f}%")
         
+        # Format payback
         payback = economic_results.get('payback_period_years', None)
         if payback and payback != float('inf'):
             print(f"  • Payback: {payback:.1f} years")
         else:
             print(f"  • Payback: Never")
         
-        # Additional metrics
-        print(f"\nADDITIONAL METRICS:")
-        print(f"  • Initial Investment: ${economic_results.get('initial_investment', 0)/1_000_000:.2f}M")
-        print(f"  • Total Revenue: ${economic_results.get('total_revenue', 0)/1_000_000:.2f}M")
-        print(f"  • Break-even Price: ${economic_results.get('break_even_price', 0):.2f}/bbl")
-        
         # Store results with dataset info
         return {
             'dataset_id': dataset_id,
             'wells_count': wells_count,
-            'total_production': reservoir_data.get('production_summary', {}).get('total_production', 0),
-            'npv': economic_results.get('npv', 0),
-            'irr': economic_results.get('irr', 0),
-            'roi': economic_results.get('roi', 0),
+            'total_production': total_production,
+            'npv': npv_value,
+            'irr': irr_value,
+            'roi': roi_value,
             'payback': payback,
             'initial_investment': economic_results.get('initial_investment', 0),
             'total_revenue': economic_results.get('total_revenue', 0),
@@ -173,21 +247,21 @@ def display_comparison_table(results: List[Dict]):
     table = PrettyTable()
     table.field_names = [
         "Dataset", "NPV ($M)", "IRR (%)", "ROI (%)", 
-        "Payback (years)", "Wells", "Production (bbl)"
+        "Payback", "Wells", "Production"
     ]
     
     table.align["Dataset"] = "l"
     table.align["NPV ($M)"] = "r"
     table.align["IRR (%)"] = "r"
     table.align["ROI (%)"] = "r"
-    table.align["Payback (years)"] = "r"
+    table.align["Payback"] = "r"
     table.align["Wells"] = "r"
-    table.align["Production (bbl)"] = "r"
+    table.align["Production"] = "r"
     
     for result in results:
         if 'error' in result:
             table.add_row([
-                result['dataset_id'][:20] + "...",
+                result['dataset_id'][:15] + "...",
                 "ERROR",
                 "ERROR",
                 "ERROR",
@@ -196,164 +270,46 @@ def display_comparison_table(results: List[Dict]):
                 "ERROR"
             ])
         else:
-            # Format NPV
+            # Format NPV with sign
             npv = result['npv']
-            npv_str = f"${npv:,.2f}M"
+            if npv >= 0:
+                npv_str = f"${npv:,.2f}M"
+            else:
+                npv_str = f"-${abs(npv):,.2f}M"
             
             # Format IRR
-            irr = min(result['irr'], 100)  # Cap at 100%
+            irr = min(result['irr'], 100)
             irr_str = f"{irr:.1f}%"
             
             # Format ROI
-            roi = max(min(result['roi'], 500), -100)  # Cap between -100% and 500%
+            roi = max(min(result['roi'], 500), -100)
             roi_str = f"{roi:.1f}%"
             
             # Format payback
             payback = result['payback']
             if payback and payback != float('inf'):
-                payback_str = f"{payback:.1f}"
+                payback_str = f"{payback:.1f}y"
             else:
                 payback_str = "Never"
             
+            # Format production
+            production = result['total_production']
+            if production >= 1_000_000:
+                prod_str = f"{production/1_000_000:.1f}M"
+            else:
+                prod_str = f"{production:,.0f}"
+            
             table.add_row([
-                result['dataset_id'][:20] + "...",
+                result['dataset_id'][:15] + "...",
                 npv_str,
                 irr_str,
                 roi_str,
                 payback_str,
                 result['wells_count'],
-                f"{result['total_production']:,.0f}"
+                prod_str
             ])
     
     print(table)
-    
-    # Calculate and display statistics
-    successful_results = [r for r in results if 'error' not in r]
-    if successful_results:
-        npvs = [r['npv'] for r in successful_results]
-        irrs = [r['irr'] for r in successful_results]
-        
-        print(f"\nSTATISTICS ({len(successful_results)} successful simulations):")
-        print(f"  • Average NPV: ${np.mean(npvs):.2f}M")
-        print(f"  • Minimum NPV: ${np.min(npvs):.2f}M")
-        print(f"  • Maximum NPV: ${np.max(npvs):.2f}M")
-        print(f"  • Average IRR: {np.mean(irrs):.1f}%")
-        
-        # Find best and worst projects
-        best_idx = np.argmax(npvs)
-        worst_idx = np.argmin(npvs)
-        
-        print(f"\nBEST PROJECT: {successful_results[best_idx]['dataset_id'][:20]}...")
-        print(f"  • NPV: ${successful_results[best_idx]['npv']:.2f}M")
-        print(f"  • IRR: {successful_results[best_idx]['irr']:.1f}%")
-        
-        print(f"\nWORST PROJECT: {successful_results[worst_idx]['dataset_id'][:20]}...")
-        print(f"  • NPV: ${successful_results[worst_idx]['npv']:.2f}M")
-        print(f"  • IRR: {successful_results[worst_idx]['irr']:.1f}%")
-
-def generate_detailed_report(results: List[Dict], params: Dict):
-    """Generate detailed report file"""
-    try:
-        import json
-        from datetime import datetime
-        
-        report_data = {
-            'timestamp': datetime.now().isoformat(),
-            'simulation_parameters': params,
-            'datasets': []
-        }
-        
-        for result in results:
-            dataset_report = {
-                'dataset_id': result['dataset_id'],
-                'wells_count': result.get('wells_count', 0),
-                'total_production': result.get('total_production', 0),
-                'economic_metrics': {
-                    'npv': result.get('npv', 0),
-                    'irr': result.get('irr', 0),
-                    'roi': result.get('roi', 0),
-                    'payback_years': result.get('payback'),
-                    'initial_investment': result.get('initial_investment', 0),
-                    'total_revenue': result.get('total_revenue', 0),
-                    'break_even_price': result.get('break_even_price', 0)
-                }
-            }
-            
-            if 'full_results' in result:
-                # Include full results for the best project
-                if result.get('npv', 0) == max([r.get('npv', 0) for r in results if 'error' not in r]):
-                    dataset_report['full_simulation_results'] = result['full_results']
-            
-            report_data['datasets'].append(dataset_report)
-        
-        # Save report
-        filename = f"simulation_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(filename, 'w') as f:
-            json.dump(report_data, f, indent=2, default=str)
-        
-        print(f"\n✓ Detailed report saved to: {filename}")
-        
-    except Exception as e:
-        print(f"\n⚠ Could not generate detailed report: {e}")
-
-def run_sensitivity_analysis(best_result: Dict, params: Dict):
-    """Run sensitivity analysis on the best project"""
-    print(f"\n{'='*60}")
-    print("SENSITIVITY ANALYSIS")
-    print(f"{'='*60}")
-    
-    try:
-        from src.economics import ReservoirSimulator, SimulationParameters
-        
-        dataset_id = best_result['dataset_id']
-        reservoir_data = best_result['full_results']
-        
-        # Variables to test
-        variables = ['oil_price', 'operating_cost', 'discount_rate']
-        variations = [-0.2, -0.1, 0, 0.1, 0.2]
-        
-        print(f"\nAnalyzing sensitivity for: {dataset_id[:20]}...")
-        print(f"Base NPV: ${best_result['npv']:.2f}M")
-        
-        sens_table = PrettyTable()
-        sens_table.field_names = ["Variable", "-20%", "-10%", "Base", "+10%", "+20%"]
-        
-        for variable in variables:
-            npv_values = []
-            
-            for variation in variations:
-                # Create modified parameters
-                modified_params = params.copy()
-                if variable == 'oil_price':
-                    modified_params[variable] = params['oil_price'] * (1 + variation)
-                elif variable == 'operating_cost':
-                    modified_params[variable] = params['operating_cost'] * (1 + variation)
-                elif variable == 'discount_rate':
-                    modified_params[variable] = params['discount_rate'] * (1 + variation)
-                
-                # Run simulation with modified parameters
-                sim_params = SimulationParameters(
-                    forecast_years=modified_params['forecast_years'],
-                    oil_price=modified_params['oil_price'],
-                    operating_cost=modified_params['operating_cost'],
-                    discount_rate=modified_params['discount_rate'],
-                    capex_per_well=modified_params['capex_per_well'],
-                    fixed_annual_opex=modified_params['fixed_annual_opex'],
-                    tax_rate=modified_params['tax_rate'],
-                    royalty_rate=modified_params['royalty_rate']
-                )
-                
-                simulator = ReservoirSimulator(reservoir_data, sim_params)
-                results = simulator.run_comprehensive_simulation()
-                npv = results.get('economic_analysis', {}).get('npv', 0)
-                npv_values.append(f"${npv:.2f}M")
-            
-            sens_table.add_row([variable] + npv_values)
-        
-        print(sens_table)
-        
-    except Exception as e:
-        print(f"\n⚠ Sensitivity analysis failed: {e}")
 
 def main():
     """Main function"""
@@ -364,9 +320,8 @@ def main():
         print("RESERVOIR SIMULATION PROJECT - PhD LEVEL")
         print("=" * 60)
         
-        # Initialize components
+        # Initialize data loader
         data_loader = DataLoader()
-        visualizer = Visualizer() if 'Visualizer' in globals() or hasattr(__import__('src.visualizer'), 'Visualizer') else None
         
         # Select data source
         print("\nSelect data source:")
@@ -391,10 +346,10 @@ def main():
         # Get simulation parameters
         params = get_simulation_parameters()
         
-        logger.info(f"Parameters set: Forecast={params['forecast_years']} years, "
-                   f"Oil price=${params['oil_price']}/bbl, "
+        logger.info(f"Parameters: {params['forecast_years']}y, "
+                   f"Oil=${params['oil_price']}/bbl, "
                    f"Opex=${params['operating_cost']}/bbl, "
-                   f"Discount rate={params['discount_rate']*100:.1f}%")
+                   f"DR={params['discount_rate']*100:.1f}%")
         
         # Run simulations for all datasets
         all_results = []
@@ -406,41 +361,23 @@ def main():
         # Display comparison
         display_comparison_table(all_results)
         
-        # Generate detailed report
-        generate_detailed_report(all_results, params)
-        
-        # Run sensitivity analysis on best project
+        # Summary statistics
         successful_results = [r for r in all_results if 'error' not in r]
         if successful_results:
-            best_result = max(successful_results, key=lambda x: x['npv'])
-            run_sensitivity_analysis(best_result, params)
-        
-        # Visualizations
-        if visualizer and successful_results:
-            try:
-                # Plot comparison
-                visualizer.plot_npv_comparison(successful_results)
-                
-                # Plot production forecast for best project
-                best_full_results = best_result.get('full_results', {})
-                if 'production_forecast' in best_full_results:
-                    visualizer.plot_production_forecast(best_full_results['production_forecast'])
-                
-                print(f"\n✓ Visualizations generated")
-            except Exception as e:
-                print(f"\n⚠ Visualizations failed: {e}")
+            npvs = [r['npv'] for r in successful_results]
+            profitable = sum(1 for npv in npvs if npv > 0)
+            
+            print(f"\nSUMMARY:")
+            print(f"  • Total simulations: {len(all_results)}")
+            print(f"  • Successful: {len(successful_results)}")
+            print(f"  • Profitable projects: {profitable}")
+            print(f"  • Average NPV: ${np.mean(npvs):.2f}M")
+            print(f"  • Best NPV: ${np.max(npvs):.2f}M")
+            print(f"  • Worst NPV: ${np.min(npvs):.2f}M")
         
         print(f"\n{'='*60}")
-        print("SIMULATION COMPLETED SUCCESSFULLY")
+        print("SIMULATION COMPLETED")
         print(f"{'='*60}")
-        
-        # Export results if visualizer available
-        if visualizer:
-            try:
-                visualizer.export_results(all_results, "final_simulation_results.json")
-                print(f"✓ Results exported to final_simulation_results.json")
-            except:
-                pass
         
     except KeyboardInterrupt:
         print("\n\nSimulation interrupted by user")
