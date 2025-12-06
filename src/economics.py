@@ -1,7 +1,7 @@
 import numpy as np
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Optional, Tuple
 from scipy.optimize import curve_fit, brentq
 from scipy.stats import linregress
 from numpy_financial import irr as npf_irr, npv as npf_npv
@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class EconomicParameters:
+    """Comprehensive economic parameters for reservoir valuation."""
     forecast_years: int = 15
     oil_price: float = 82.50
     gas_price: float = 3.50
@@ -29,517 +30,694 @@ class EconomicParameters:
 
 @dataclass
 class ReservoirProperties:
-    ooip: float = 0.0
+    """Physical properties of the reservoir."""
+    original_oil_in_place: float = 0.0
     recoverable_oil: float = 0.0
     recovery_factor: float = 0.0
     drive_mechanism: str = "Solution Gas Drive"
     aquifer_strength: float = 0.0
+    reservoir_volume: float = 0.0
+    average_porosity: float = 0.15
+    connate_water_saturation: float = 0.25
+    formation_volume_factor: float = 1.2
 
-class AdvancedDeclineAnalysis:
+@dataclass
+class WellProductionData:
+    """Container for well production time series."""
+    time_points: np.ndarray
+    oil_rate: np.ndarray
+    gas_rate: Optional[np.ndarray] = None
+    water_rate: Optional[np.ndarray] = None
+    bottomhole_pressure: Optional[np.ndarray] = None
+    well_type: str = "PRODUCER"
+
+class DeclineCurveAnalysis:
+    """Advanced decline curve analysis using Arps, exponential, and harmonic models."""
+    
     @staticmethod
-    def arps_hyperbolic(t: np.ndarray, qi: float, di: float, b: float) -> np.ndarray:
+    def hyperbolic_decline(t: np.ndarray, initial_rate: float, 
+                          initial_decline: float, b_factor: float) -> np.ndarray:
+        """Arps hyperbolic decline model."""
         epsilon = 1e-10
-        b_safe = np.clip(b, 0.1, 1.9)
-        di_safe = np.clip(di, 1e-6, 0.5)
-        denominator = 1 + b_safe * di_safe * t
+        b_clamped = np.clip(b_factor, 0.1, 1.9)
+        d_clamped = np.clip(initial_decline, 1e-6, 0.5)
+        denominator = 1 + b_clamped * d_clamped * t
         denominator = np.maximum(denominator, epsilon)
-        return qi / denominator ** (1 / b_safe)
+        return initial_rate / denominator ** (1 / b_clamped)
     
     @staticmethod
-    def exponential(t: np.ndarray, qi: float, di: float) -> np.ndarray:
-        di_safe = np.clip(di, 1e-6, 0.5)
-        return qi * np.exp(-di_safe * t)
+    def exponential_decline(t: np.ndarray, initial_rate: float, 
+                           decline_rate: float) -> np.ndarray:
+        """Exponential decline model."""
+        decline_rate_clamped = np.clip(decline_rate, 1e-6, 0.5)
+        return initial_rate * np.exp(-decline_rate_clamped * t)
     
     @staticmethod
-    def harmonic(t: np.ndarray, qi: float, di: float) -> np.ndarray:
-        di_safe = np.clip(di, 1e-6, 0.5)
-        denominator = 1 + di_safe * t
+    def harmonic_decline(t: np.ndarray, initial_rate: float, 
+                        decline_rate: float) -> np.ndarray:
+        """Harmonic decline model."""
+        decline_rate_clamped = np.clip(decline_rate, 1e-6, 0.5)
+        denominator = 1 + decline_rate_clamped * t
         denominator = np.maximum(denominator, 1e-10)
-        return qi / denominator
+        return initial_rate / denominator
     
     @staticmethod
-    def fit_optimal_decline(time: np.ndarray, rate: np.ndarray) -> Dict:
-        if len(time) < 4 or len(rate) < 4:
+    def fit_decline_curve(time_series: np.ndarray, rate_series: np.ndarray) -> Optional[Dict]:
+        """Fit optimal decline curve to production data."""
+        if len(time_series) < 4 or len(rate_series) < 4:
             return None
         
-        valid_mask = (rate > 0) & (~np.isnan(rate))
+        valid_mask = (rate_series > 0) & (~np.isnan(rate_series))
         if np.sum(valid_mask) < 4:
             return None
         
-        t_norm = time[valid_mask] - time[valid_mask][0]
-        rate_valid = rate[valid_mask]
+        time_normalized = time_series[valid_mask] - time_series[valid_mask][0]
+        rates_valid = rate_series[valid_mask]
         
         models = [
-            ('exponential', AdvancedDeclineAnalysis.exponential),
-            ('harmonic', AdvancedDeclineAnalysis.harmonic),
+            ('exponential', DeclineCurveAnalysis.exponential_decline),
+            ('harmonic', DeclineCurveAnalysis.harmonic_decline),
         ]
         
-        best_fit = None
-        best_params = None
-        best_r2 = -np.inf
+        optimal_params = None
+        best_r_squared = -np.inf
         
-        for model_name, model_func in models:
+        for model_name, model_function in models:
             try:
                 if model_name == 'exponential':
-                    log_rate = np.log(rate_valid)
-                    slope, intercept, r_value, _, _ = linregress(t_norm, log_rate)
-                    qi = np.exp(intercept)
-                    di = max(-slope, 1e-6)
-                    params = {'qi': qi, 'di': di, 'b': 0}
+                    log_rates = np.log(rates_valid)
+                    slope, intercept, r_value, _, _ = linregress(time_normalized, log_rates)
+                    initial_rate = np.exp(intercept)
+                    decline_rate = max(-slope, 1e-6)
+                    parameters = {'initial_rate': initial_rate, 
+                                 'decline_rate': decline_rate, 'b_factor': 0}
                 else:
-                    inv_rate = 1 / rate_valid
-                    slope, intercept, r_value, _, _ = linregress(t_norm, inv_rate)
-                    qi = 1 / intercept if intercept != 0 else rate_valid[0]
-                    di = slope / intercept if intercept != 0 else 1e-6
-                    params = {'qi': qi, 'di': max(di, 1e-6), 'b': 1}
+                    inverse_rates = 1 / rates_valid
+                    slope, intercept, r_value, _, _ = linregress(time_normalized, inverse_rates)
+                    initial_rate = 1 / intercept if intercept != 0 else rates_valid[0]
+                    decline_rate = slope / intercept if intercept != 0 else 1e-6
+                    parameters = {'initial_rate': initial_rate, 
+                                 'decline_rate': max(decline_rate, 1e-6), 'b_factor': 1}
                 
-                predicted = model_func(t_norm, **{k: v for k, v in params.items() if k in ['qi', 'di']})
+                predicted_rates = model_function(time_normalized, **{
+                    k: v for k, v in parameters.items() 
+                    if k in ['initial_rate', 'decline_rate']
+                })
                 
-                ss_res = np.sum((rate_valid - predicted) ** 2)
-                ss_tot = np.sum((rate_valid - np.mean(rate_valid)) ** 2)
-                r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+                ss_residual = np.sum((rates_valid - predicted_rates) ** 2)
+                ss_total = np.sum((rates_valid - np.mean(rates_valid)) ** 2)
+                r_squared = 1 - (ss_residual / ss_total) if ss_total > 0 else 0
                 
-                if r2 > best_r2 and r2 > 0.7:
-                    best_r2 = r2
-                    best_fit = model_name
-                    best_params = params
-                    best_params['r2'] = r2
-                    best_params['method'] = model_name
+                if r_squared > best_r_squared and r_squared > 0.7:
+                    best_r_squared = r_squared
+                    optimal_params = parameters
+                    optimal_params['r_squared'] = r_squared
+                    optimal_params['model_type'] = model_name
                     
             except Exception:
                 continue
         
-        if best_params is None:
-            qi_guess = rate_valid[0]
-            di_guess = 0.001
-            best_params = {
-                'qi': qi_guess,
-                'di': di_guess,
-                'b': 0,
-                'r2': 0,
-                'method': 'exponential'
+        if optimal_params is None:
+            initial_rate_guess = rates_valid[0]
+            decline_rate_guess = 0.001
+            optimal_params = {
+                'initial_rate': initial_rate_guess,
+                'decline_rate': decline_rate_guess,
+                'b_factor': 0,
+                'r_squared': 0,
+                'model_type': 'exponential'
             }
         
-        return best_params
+        return optimal_params
+
+class ReservoirCharacterization:
+    """Reservoir property estimation and characterization."""
+    
+    @staticmethod
+    def estimate_original_oil_in_place(grid_dimensions: Tuple[int, int, int],
+                                      cell_size: Tuple[float, float, float],
+                                      porosity: float,
+                                      water_saturation: float,
+                                      formation_volume_factor: float) -> float:
+        """Calculate OOIP using volumetric method."""
+        cells_x, cells_y, cells_z = grid_dimensions
+        dx, dy, dz = cell_size
+        
+        bulk_volume = cells_x * dx * cells_y * dy * cells_z * dz
+        pore_volume = bulk_volume * porosity
+        hydrocarbon_pore_volume = pore_volume * (1 - water_saturation)
+        
+        return hydrocarbon_pore_volume / formation_volume_factor
+    
+    @staticmethod
+    def estimate_recovery_factor(production_history: np.ndarray,
+                                original_oil_in_place: float,
+                                drive_mechanism: str) -> float:
+        """Estimate recovery factor based on production data and drive mechanism."""
+        cumulative_production = np.sum(production_history)
+        
+        if original_oil_in_place <= 0:
+            return 0.0
+        
+        base_recovery = cumulative_production / original_oil_in_place
+        
+        mechanism_factors = {
+            "Solution Gas Drive": 0.15,
+            "Water Drive": 0.35,
+            "Gas Cap Drive": 0.25,
+            "Combination Drive": 0.30
+        }
+        
+        mechanism_factor = mechanism_factors.get(drive_mechanism, 0.20)
+        
+        return min(base_recovery * 1.5, mechanism_factor)
 
 class ReservoirSimulator:
-    def __init__(self, data: Dict, econ_params: EconomicParameters = None):
-        self.data = data
-        self.econ_params = econ_params or EconomicParameters()
-        self.results = {}
+    """Comprehensive reservoir simulation and economic evaluation system."""
+    
+    def __init__(self, reservoir_data: Dict, 
+                 economic_parameters: EconomicParameters = None):
+        self.reservoir_data = reservoir_data
+        self.economic_parameters = economic_parameters or EconomicParameters()
+        self.simulation_results = {}
         self.decline_curves = {}
-        self.reservoir_props = ReservoirProperties()
+        self.reservoir_properties = ReservoirProperties()
         
-    def run_comprehensive_analysis(self) -> Dict:
-        logger.info("Starting advanced reservoir simulation")
+    def execute_comprehensive_analysis(self) -> Dict:
+        """Execute full reservoir simulation workflow."""
+        logger.info("Initiating comprehensive reservoir simulation")
         
         try:
             self._validate_input_data()
             
-            self.reservoir_props = self._characterize_reservoir()
+            self.reservoir_properties = self._characterize_reservoir()
             
             self.decline_curves = self._perform_decline_analysis()
             
             production_forecast = self._generate_production_forecast()
             
-            economic_results = self._perform_economic_evaluation(production_forecast)
+            economic_evaluation = self._perform_economic_analysis(production_forecast)
             
-            uncertainty_results = self._run_uncertainty_analysis(production_forecast)
+            uncertainty_analysis = self._execute_uncertainty_analysis(production_forecast)
             
-            self.results = {
-                'reservoir_properties': self._dict_from_dataclass(self.reservoir_props),
+            self.simulation_results = {
+                'reservoir_properties': self._serialize_dataclass(self.reservoir_properties),
                 'decline_analysis': self.decline_curves,
                 'production_forecast': production_forecast,
-                'economic_evaluation': economic_results,
-                'uncertainty_analysis': uncertainty_results,
-                'key_performance_indicators': self._calculate_kpis(economic_results, production_forecast)
+                'economic_evaluation': economic_evaluation,
+                'uncertainty_analysis': uncertainty_analysis,
+                'performance_metrics': self._compute_performance_metrics(
+                    economic_evaluation, production_forecast)
             }
             
             logger.info("Simulation completed successfully")
-            return self.results
+            return self.simulation_results
             
-        except Exception as e:
-            logger.error(f"Simulation failed: {e}", exc_info=True)
-            return self._generate_error_results(str(e))
+        except Exception as simulation_error:
+            logger.error(f"Simulation terminated: {simulation_error}", exc_info=True)
+            return self._generate_error_output(str(simulation_error))
     
     def _validate_input_data(self):
-        if 'wells' not in self.data or not self.data['wells']:
-            raise ValueError("No well data available")
+        """Validate input data structure and completeness."""
+        if 'wells' not in self.reservoir_data or not self.reservoir_data['wells']:
+            raise ValueError("Insufficient well data for analysis")
         
-        valid_wells = 0
-        for well_name, well in self.data['wells'].items():
-            if hasattr(well, 'oil_rate') and hasattr(well, 'time_points'):
-                if len(well.oil_rate) >= 3 and len(well.time_points) >= 3:
-                    valid_wells += 1
+        validated_wells = 0
+        for well_identifier, well_data in self.reservoir_data['wells'].items():
+            if (hasattr(well_data, 'oil_rate') and hasattr(well_data, 'time_points') and
+                len(well_data.oil_rate) >= 3 and len(well_data.time_points) >= 3):
+                validated_wells += 1
         
-        if valid_wells < 3:
-            raise ValueError(f"Insufficient valid well data: {valid_wells} wells")
+        if validated_wells < 3:
+            raise ValueError(f"Inadequate production data: {validated_wells} valid wells")
         
-        logger.info(f"Validated {valid_wells} wells with production data")
+        logger.info(f"Data validation passed: {validated_wells} wells with production history")
     
     def _characterize_reservoir(self) -> ReservoirProperties:
-        wells = self.data['wells']
+        """Characterize reservoir properties from available data."""
+        wells = self.reservoir_data['wells']
         
-        total_production = 0
-        peak_rate = 0
+        total_cumulative_production = 0.0
+        maximum_production_rate = 0.0
         
-        for well_name, well in wells.items():
-            if hasattr(well, 'oil_rate'):
-                rates = well.oil_rate
-                if len(rates) > 0:
-                    peak_rate = max(peak_rate, np.max(rates))
+        for well_identifier, well_data in wells.items():
+            if hasattr(well_data, 'oil_rate'):
+                production_rates = well_data.oil_rate
+                if len(production_rates) > 0:
+                    maximum_production_rate = max(maximum_production_rate, 
+                                                 np.max(production_rates))
                     
-                    if hasattr(well, 'time_points'):
-                        times = well.time_points
-                        if len(times) >= 2:
-                            total_production += np.trapz(rates, times)
+                    if hasattr(well_data, 'time_points'):
+                        time_points = well_data.time_points
+                        if len(time_points) >= 2:
+                            total_cumulative_production += np.trapz(
+                                production_rates, time_points)
         
-        avg_porosity = 0.15
-        if 'grid' in self.data and 'porosity' in self.data['grid']:
-            porosity_data = self.data['grid']['porosity']
+        grid_info = self.reservoir_data.get('grid', {})
+        
+        average_porosity = 0.15
+        if 'porosity' in grid_info:
+            porosity_data = grid_info['porosity']
             if isinstance(porosity_data, np.ndarray) and len(porosity_data) > 0:
-                avg_porosity = np.mean(porosity_data)
+                average_porosity = np.mean(porosity_data)
         
-        grid_dims = self.data['grid'].get('dimensions', (24, 25, 15))
-        cell_count = grid_dims[0] * grid_dims[1] * grid_dims[2]
+        grid_dimensions = grid_info.get('dimensions', (24, 25, 15))
+        grid_cell_count = grid_dimensions[0] * grid_dimensions[1] * grid_dimensions[2]
         
-        avg_thickness = 50.0
-        area_acres = 40.0
-        boi = 1.2
-        swi = 0.25
+        average_net_pay = 50.0
+        drainage_area = 40.0
+        formation_volume_factor = 1.2
+        connate_water_saturation = 0.25
         
-        ooip = 7758 * area_acres * avg_thickness * avg_porosity * (1 - swi) / boi
+        original_oil_in_place = (7758 * drainage_area * average_net_pay * 
+                                average_porosity * (1 - connate_water_saturation) / 
+                                formation_volume_factor)
         
-        recovery_factor = min(total_production / ooip if ooip > 0 else 0, 0.45)
+        recovery_factor = ReservoirCharacterization.estimate_recovery_factor(
+            total_cumulative_production, original_oil_in_place, "Solution Gas Drive")
         
         return ReservoirProperties(
-            ooip=ooip,
-            recoverable_oil=ooip * recovery_factor,
+            original_oil_in_place=original_oil_in_place,
+            recoverable_oil=original_oil_in_place * recovery_factor,
             recovery_factor=recovery_factor,
             drive_mechanism="Solution Gas Drive" if recovery_factor < 0.25 else "Water Drive",
-            aquifer_strength=min(recovery_factor / 0.3, 1.0)
+            aquifer_strength=min(recovery_factor / 0.3, 1.0),
+            average_porosity=average_porosity,
+            connate_water_saturation=connate_water_saturation,
+            formation_volume_factor=formation_volume_factor
         )
     
     def _perform_decline_analysis(self) -> Dict:
+        """Perform decline curve analysis for all wells."""
         decline_results = {}
         
-        for well_name, well in self.data['wells'].items():
-            if hasattr(well, 'oil_rate') and hasattr(well, 'time_points'):
-                rates = well.oil_rate
-                times = well.time_points
+        for well_identifier, well_data in self.reservoir_data['wells'].items():
+            if hasattr(well_data, 'oil_rate') and hasattr(well_data, 'time_points'):
+                production_rates = well_data.oil_rate
+                time_points = well_data.time_points
                 
-                if len(rates) >= 4 and len(times) >= 4:
-                    result = AdvancedDeclineAnalysis.fit_optimal_decline(times, rates)
+                if len(production_rates) >= 4 and len(time_points) >= 4:
+                    decline_parameters = DeclineCurveAnalysis.fit_decline_curve(
+                        time_points, production_rates)
                     
-                    if result and result.get('r2', 0) > 0.6:
-                        decline_results[well_name] = result
+                    if decline_parameters and decline_parameters.get('r_squared', 0) > 0.6:
+                        decline_results[well_identifier] = decline_parameters
                         
-                        well_type = getattr(well, 'well_type', 'PRODUCER')
-                        logger.info(f"{well_type} {well_name}: qi={result['qi']:.0f} bpd, "
-                                  f"di={result['di']:.4f}, R²={result.get('r2', 0):.3f}")
+                        well_classification = getattr(well_data, 'well_type', 'PRODUCER')
+                        logger.info(
+                            f"{well_classification} {well_identifier}: "
+                            f"qi={decline_parameters['initial_rate']:.0f} bpd, "
+                            f"di={decline_parameters['decline_rate']:.4f}, "
+                            f"R²={decline_parameters.get('r_squared', 0):.3f}")
         
         return decline_results
     
     def _generate_production_forecast(self) -> Dict:
-        forecast_days = self.econ_params.forecast_years * 365
-        monthly_steps = self.econ_params.forecast_years * 12
+        """Generate production forecast based on decline curves."""
+        forecast_duration_days = self.economic_parameters.forecast_years * 365
+        monthly_intervals = self.economic_parameters.forecast_years * 12
         
-        time_forecast = np.linspace(0, forecast_days, monthly_steps)
+        forecast_time = np.linspace(0, forecast_duration_days, monthly_intervals)
         
-        field_production = np.zeros(monthly_steps)
-        well_forecasts = {}
+        field_production_profile = np.zeros(monthly_intervals)
+        individual_well_forecasts = {}
         
-        for well_name, decline_params in self.decline_curves.items():
-            well = self.data['wells'][well_name]
-            well_type = getattr(well, 'well_type', 'PRODUCER')
+        for well_identifier, decline_parameters in self.decline_curves.items():
+            well_data = self.reservoir_data['wells'][well_identifier]
+            well_classification = getattr(well_data, 'well_type', 'PRODUCER')
             
-            if well_type != 'PRODUCER':
+            if well_classification != 'PRODUCER':
                 continue
             
-            qi = decline_params['qi']
-            di = decline_params['di']
-            b = decline_params.get('b', 0)
-            method = decline_params.get('method', 'exponential')
+            initial_rate = decline_parameters['initial_rate']
+            decline_rate = decline_parameters['decline_rate']
+            b_factor = decline_parameters.get('b_factor', 0)
+            model_type = decline_parameters.get('model_type', 'exponential')
             
-            if method == 'exponential':
-                rates = AdvancedDeclineAnalysis.exponential(time_forecast, qi, di)
-            elif method == 'harmonic':
-                rates = AdvancedDeclineAnalysis.harmonic(time_forecast, qi, di)
+            if model_type == 'exponential':
+                production_rates = DeclineCurveAnalysis.exponential_decline(
+                    forecast_time, initial_rate, decline_rate)
+            elif model_type == 'harmonic':
+                production_rates = DeclineCurveAnalysis.harmonic_decline(
+                    forecast_time, initial_rate, decline_rate)
             else:
-                rates = AdvancedDeclineAnalysis.exponential(time_forecast, qi, di)
+                production_rates = DeclineCurveAnalysis.exponential_decline(
+                    forecast_time, initial_rate, decline_rate)
             
-            economic_limit = 50.0
-            rates = np.where(rates < economic_limit, 0, rates)
+            economic_limit_rate = 50.0
+            production_rates = np.where(
+                production_rates < economic_limit_rate, 0, production_rates)
             
-            field_production += rates
+            field_production_profile += production_rates
             
-            well_forecasts[well_name] = {
-                'time': time_forecast,
-                'rate': rates,
-                'cumulative': np.cumsum(rates * 30.4),
-                'eur': np.trapz(rates, time_forecast),
-                'decline_params': decline_params
+            individual_well_forecasts[well_identifier] = {
+                'time': forecast_time,
+                'production_rate': production_rates,
+                'cumulative_production': np.cumsum(production_rates * 30.4),
+                'estimated_ultimate_recovery': np.trapz(production_rates, forecast_time),
+                'decline_parameters': decline_parameters
             }
         
-        annual_production = self._convert_to_annual(field_production, monthly_steps)
+        annual_production_profile = self._aggregate_annual_production(
+            field_production_profile, monthly_intervals)
         
         return {
-            'time': time_forecast,
-            'field_rate': field_production,
-            'field_cumulative': np.cumsum(field_production * 30.4),
-            'annual_production': annual_production,
-            'well_forecasts': well_forecasts,
-            'total_eur': np.trapz(field_production, time_forecast)
+            'time_series': forecast_time,
+            'field_production_rate': field_production_profile,
+            'cumulative_field_production': np.cumsum(field_production_profile * 30.4),
+            'annual_production': annual_production_profile,
+            'well_forecasts': individual_well_forecasts,
+            'total_estimated_ultimate_recovery': np.trapz(
+                field_production_profile, forecast_time)
         }
     
-    def _convert_to_annual(self, monthly_production: np.ndarray, total_months: int) -> np.ndarray:
-        years = self.econ_params.forecast_years
-        annual = np.zeros(years)
+    def _aggregate_annual_production(self, monthly_production: np.ndarray, 
+                                    total_months: int) -> np.ndarray:
+        """Convert monthly production to annual aggregates."""
+        years = self.economic_parameters.forecast_years
+        annual_production = np.zeros(years)
         
         months_per_year = 12
-        for year in range(years):
-            start_month = year * months_per_year
-            end_month = min((year + 1) * months_per_year, total_months)
+        for year_index in range(years):
+            start_month = year_index * months_per_year
+            end_month = min((year_index + 1) * months_per_year, total_months)
             if start_month < len(monthly_production):
-                annual[year] = np.sum(monthly_production[start_month:end_month]) * 30.4
+                annual_production[year_index] = np.sum(
+                    monthly_production[start_month:end_month]) * 30.4
         
-        return annual
+        return annual_production
     
-    def _perform_economic_evaluation(self, production_forecast: Dict) -> Dict:
+    def _perform_economic_analysis(self, production_forecast: Dict) -> Dict:
+        """Perform detailed economic evaluation."""
         annual_production = production_forecast['annual_production']
-        years = len(annual_production)
+        evaluation_years = len(annual_production)
         
-        producers = sum(1 for w in self.data['wells'].values() 
-                       if getattr(w, 'well_type', 'PRODUCER') == 'PRODUCER')
-        injectors = sum(1 for w in self.data['wells'].values() 
-                       if getattr(w, 'well_type', 'PRODUCER') == 'INJECTOR')
+        producer_count = sum(1 for well in self.reservoir_data['wells'].values() 
+                           if getattr(well, 'well_type', 'PRODUCER') == 'PRODUCER')
+        injector_count = sum(1 for well in self.reservoir_data['wells'].values() 
+                           if getattr(well, 'well_type', 'PRODUCER') == 'INJECTOR')
         
-        capex_wells = (producers * self.econ_params.capex_per_producer + 
-                      injectors * self.econ_params.capex_per_injector)
-        capex_total = capex_wells + self.econ_params.facilities_cost
-        capex_total *= (1 + self.econ_params.contingency_rate)
+        well_capital_expenditure = (
+            producer_count * self.economic_parameters.capex_per_producer +
+            injector_count * self.economic_parameters.capex_per_injector)
+        total_capital_expenditure = (
+            well_capital_expenditure + self.economic_parameters.facilities_cost)
+        total_capital_expenditure *= (1 + self.economic_parameters.contingency_rate)
         
-        cash_flows = [-capex_total]
+        cash_flow_series = [-total_capital_expenditure]
         
-        for year in range(years):
-            oil_production = annual_production[year]
+        for year_index in range(evaluation_years):
+            annual_oil_production = annual_production[year_index]
             
-            oil_revenue = oil_production * self.econ_params.oil_price * (1 + self.econ_params.inflation_rate) ** year
+            oil_revenue = (
+                annual_oil_production * self.economic_parameters.oil_price *
+                (1 + self.economic_parameters.inflation_rate) ** year_index)
             
-            royalty = oil_revenue * self.econ_params.royalty_rate
+            royalty_payment = oil_revenue * self.economic_parameters.royalty_rate
             
-            variable_opex = oil_production * self.econ_params.opex_per_bbl
-            fixed_opex = self.econ_params.fixed_opex * (1 + self.econ_params.inflation_rate) ** year
+            variable_operating_cost = (
+                annual_oil_production * self.economic_parameters.opex_per_bbl)
+            fixed_operating_cost = (
+                self.economic_parameters.fixed_opex *
+                (1 + self.economic_parameters.inflation_rate) ** year_index)
             
-            depreciation = capex_total / 10 if year < 10 else 0
+            depreciation_expense = (
+                total_capital_expenditure / 10 if year_index < 10 else 0)
             
-            operating_cost = variable_opex + fixed_opex
+            total_operating_cost = variable_operating_cost + fixed_operating_cost
             
-            ebitda = oil_revenue - royalty - operating_cost
+            earnings_before_tax = (
+                oil_revenue - royalty_payment - total_operating_cost)
             
-            tax = max(0, ebitda - depreciation) * self.econ_params.tax_rate
+            tax_liability = max(0, earnings_before_tax - depreciation_expense) * \
+                           self.economic_parameters.tax_rate
             
-            net_cash_flow = ebitda - tax + depreciation
+            net_cash_flow = earnings_before_tax - tax_liability + depreciation_expense
             
-            cash_flows.append(net_cash_flow)
+            cash_flow_series.append(net_cash_flow)
         
-        if years > 0:
-            cash_flows[-1] -= self.econ_params.abandonment_cost
+        if evaluation_years > 0:
+            cash_flow_series[-1] -= self.economic_parameters.abandonment_cost
         
-        npv = self._calculate_npv(cash_flows, self.econ_params.discount_rate)
-        irr = self._calculate_irr(cash_flows)
+        net_present_value = self._calculate_net_present_value(
+            cash_flow_series, self.economic_parameters.discount_rate)
+        internal_rate_of_return = self._calculate_internal_rate_of_return(cash_flow_series)
         
-        total_revenue = sum(annual_production) * self.econ_params.oil_price
-        total_opex = sum(annual_production) * self.econ_params.opex_per_bbl + years * self.econ_params.fixed_opex
+        total_revenue = sum(annual_production) * self.economic_parameters.oil_price
+        total_operating_expenditure = (
+            sum(annual_production) * self.economic_parameters.opex_per_bbl +
+            evaluation_years * self.economic_parameters.fixed_opex)
         
-        roi = (npv / capex_total) * 100 if capex_total > 0 else 0
-        profit_index = -npv / capex_total if capex_total > 0 else 0
+        return_on_investment = (
+            (net_present_value / total_capital_expenditure) * 100 
+            if total_capital_expenditure > 0 else 0)
+        profitability_index = (
+            -net_present_value / total_capital_expenditure 
+            if total_capital_expenditure > 0 else 0)
         
-        payback = self._calculate_discounted_payback(cash_flows, self.econ_params.discount_rate)
+        discounted_payback = self._calculate_discounted_payback_period(
+            cash_flow_series, self.economic_parameters.discount_rate)
         
-        break_even_price = self._calculate_break_even_price(cash_flows, sum(annual_production))
+        break_even_price = self._compute_break_even_price(
+            cash_flow_series, sum(annual_production))
         
         return {
-            'capex': capex_total,
-            'opex': total_opex,
-            'revenue': total_revenue,
-            'npv': npv,
-            'irr': irr * 100,
-            'roi': roi,
-            'profitability_index': profit_index,
-            'payback_period': payback,
+            'capital_expenditure': total_capital_expenditure,
+            'operating_expenditure': total_operating_expenditure,
+            'total_revenue': total_revenue,
+            'net_present_value': net_present_value,
+            'internal_rate_of_return': internal_rate_of_return * 100,
+            'return_on_investment': return_on_investment,
+            'profitability_index': profitability_index,
+            'discounted_payback_period': discounted_payback,
             'break_even_price': break_even_price,
-            'cash_flows': cash_flows,
-            'annual_cash_flows': cash_flows[1:],
-            'economic_limit': self._calculate_economic_limit(),
-            'unit_development_cost': capex_total / sum(annual_production) if sum(annual_production) > 0 else 0
+            'cash_flow_series': cash_flow_series,
+            'annual_cash_flows': cash_flow_series[1:],
+            'economic_limit_rate': self._determine_economic_limit(),
+            'unit_development_cost': (
+                total_capital_expenditure / sum(annual_production) 
+                if sum(annual_production) > 0 else 0)
         }
     
-    def _calculate_npv(self, cash_flows: List[float], discount_rate: float) -> float:
+    def _calculate_net_present_value(self, cash_flows: List[float], 
+                                    discount_rate: float) -> float:
+        """Calculate net present value."""
         try:
             return npf_npv(discount_rate, cash_flows)
-        except:
-            npv = 0.0
-            for t, cf in enumerate(cash_flows):
-                npv += cf / ((1 + discount_rate) ** t)
-            return npv
+        except Exception:
+            present_value = 0.0
+            for time_index, cash_flow in enumerate(cash_flows):
+                present_value += cash_flow / ((1 + discount_rate) ** time_index)
+            return present_value
     
-    def _calculate_irr(self, cash_flows: List[float]) -> float:
+    def _calculate_internal_rate_of_return(self, cash_flows: List[float]) -> float:
+        """Calculate internal rate of return."""
         try:
-            irr_value = npf_irr(cash_flows)
-            if irr_value is None or np.isnan(irr_value) or irr_value < -0.9 or irr_value > 5:
-                return self._calculate_irr_manual(cash_flows)
-            return irr_value
-        except:
-            return self._calculate_irr_manual(cash_flows)
+            calculated_irr = npf_irr(cash_flows)
+            if (calculated_irr is None or np.isnan(calculated_irr) or 
+                calculated_irr < -0.9 or calculated_irr > 5):
+                return self._compute_irr_numerically(cash_flows)
+            return calculated_irr
+        except Exception:
+            return self._compute_irr_numerically(cash_flows)
     
-    def _calculate_irr_manual(self, cash_flows: List[float]) -> float:
-        def npv_func(rate):
-            return sum(cf / ((1 + rate) ** i) for i, cf in enumerate(cash_flows))
+    def _compute_irr_numerically(self, cash_flows: List[float]) -> float:
+        """Numerical IRR calculation using Brent's method."""
+        def present_value_function(rate):
+            return sum(cf / ((1 + rate) ** idx) for idx, cf in enumerate(cash_flows))
         
         try:
-            return brentq(npv_func, -0.5, 2.0, maxiter=1000)
-        except:
+            return brentq(present_value_function, -0.5, 2.0, maxiter=1000)
+        except Exception:
             return 0.0
     
-    def _calculate_discounted_payback(self, cash_flows: List[float], discount_rate: float) -> float:
+    def _calculate_discounted_payback_period(self, cash_flows: List[float], 
+                                           discount_rate: float) -> float:
+        """Calculate discounted payback period."""
         if len(cash_flows) < 2:
             return float('inf')
         
         initial_investment = abs(cash_flows[0])
-        cumulative_pv = 0.0
+        cumulative_present_value = 0.0
         
-        for year, cf in enumerate(cash_flows[1:], 1):
-            discounted_cf = cf / ((1 + discount_rate) ** year)
-            cumulative_pv += discounted_cf
+        for year, annual_cash_flow in enumerate(cash_flows[1:], 1):
+            discounted_cash_flow = annual_cash_flow / ((1 + discount_rate) ** year)
+            cumulative_present_value += discounted_cash_flow
             
-            if cumulative_pv >= initial_investment:
+            if cumulative_present_value >= initial_investment:
                 if year == 1:
                     return 1.0
                 
-                prev_cumulative = cumulative_pv - discounted_cf
-                remaining = initial_investment - prev_cumulative
-                fraction = remaining / discounted_cf
-                return year - 1 + fraction
+                previous_cumulative = cumulative_present_value - discounted_cash_flow
+                remaining_investment = initial_investment - previous_cumulative
+                fractional_year = remaining_investment / discounted_cash_flow
+                return year - 1 + fractional_year
         
         return float('inf')
     
-    def _calculate_break_even_price(self, cash_flows: List[float], total_production: float) -> float:
+    def _compute_break_even_price(self, cash_flows: List[float], 
+                                 total_production: float) -> float:
+        """Calculate break-even oil price."""
         if total_production <= 0:
             return 0.0
         
-        total_cost = sum(abs(cf) for cf in cash_flows if cf < 0)
+        total_cost = sum(abs(cash_flow) for cash_flow in cash_flows if cash_flow < 0)
         return total_cost / total_production
     
-    def _calculate_economic_limit(self) -> float:
-        return (self.econ_params.fixed_opex / 365) / self.econ_params.opex_per_bbl
+    def _determine_economic_limit(self) -> float:
+        """Determine economic limit production rate."""
+        return (self.economic_parameters.fixed_opex / 365) / self.economic_parameters.opex_per_bbl
     
-    def _run_uncertainty_analysis(self, production_forecast: Dict) -> Dict:
-        base_npv = self.results.get('economic_evaluation', {}).get('npv', 0)
+    def _execute_uncertainty_analysis(self, production_forecast: Dict) -> Dict:
+        """Perform Monte Carlo uncertainty analysis."""
+        base_net_present_value = self.simulation_results.get(
+            'economic_evaluation', {}).get('net_present_value', 0)
         
-        scenarios = {
-            'low_case': {'oil_price': -0.20, 'opex': 0.15, 'production': -0.15},
-            'base_case': {'oil_price': 0.00, 'opex': 0.00, 'production': 0.00},
-            'high_case': {'oil_price': 0.20, 'opex': -0.10, 'production': 0.15}
+        scenario_configurations = {
+            'pessimistic_case': {
+                'oil_price_variation': -0.20, 
+                'operating_cost_variation': 0.15, 
+                'production_variation': -0.15
+            },
+            'base_case': {
+                'oil_price_variation': 0.00, 
+                'operating_cost_variation': 0.00, 
+                'production_variation': 0.00
+            },
+            'optimistic_case': {
+                'oil_price_variation': 0.20, 
+                'operating_cost_variation': -0.10, 
+                'production_variation': 0.15
+            }
         }
         
-        sensitivity = {}
-        for case_name, variations in scenarios.items():
-            modified_params = EconomicParameters(
-                oil_price=self.econ_params.oil_price * (1 + variations['oil_price']),
-                opex_per_bbl=self.econ_params.opex_per_bbl * (1 + variations['opex'])
+        scenario_analysis = {}
+        for scenario_name, parameter_variations in scenario_configurations.items():
+            modified_economic_parameters = EconomicParameters(
+                oil_price=self.economic_parameters.oil_price * 
+                         (1 + parameter_variations['oil_price_variation']),
+                opex_per_bbl=self.economic_parameters.opex_per_bbl * 
+                           (1 + parameter_variations['operating_cost_variation'])
             )
             
-            modified_production = production_forecast['annual_production'] * (1 + variations['production'])
+            modified_annual_production = (
+                production_forecast['annual_production'] * 
+                (1 + parameter_variations['production_variation']))
             
-            modified_forecast = production_forecast.copy()
-            modified_forecast['annual_production'] = modified_production
+            modified_production_forecast = production_forecast.copy()
+            modified_production_forecast['annual_production'] = modified_annual_production
             
-            economic_results = self._perform_economic_evaluation(modified_forecast)
+            modified_economic_results = self._perform_economic_analysis(
+                modified_production_forecast)
             
-            sensitivity[case_name] = {
-                'npv': economic_results['npv'],
-                'irr': economic_results['irr'],
-                'key_assumptions': variations
+            scenario_analysis[scenario_name] = {
+                'net_present_value': modified_economic_results['net_present_value'],
+                'internal_rate_of_return': modified_economic_results['internal_rate_of_return'],
+                'parameter_assumptions': parameter_variations
             }
         
-        tornado_data = []
-        for variable in ['oil_price', 'production', 'opex']:
-            low_npv = sensitivity['low_case']['npv'] if variable in ['oil_price', 'production'] else base_npv
-            high_npv = sensitivity['high_case']['npv'] if variable in ['oil_price', 'production'] else base_npv
+        tornado_analysis = []
+        for parameter in ['oil_price', 'production', 'opex']:
+            low_net_present_value = (
+                scenario_analysis['pessimistic_case']['net_present_value'] 
+                if parameter in ['oil_price', 'production'] else base_net_present_value)
+            high_net_present_value = (
+                scenario_analysis['optimistic_case']['net_present_value'] 
+                if parameter in ['oil_price', 'production'] else base_net_present_value)
             
-            tornado_data.append({
-                'variable': variable,
-                'low_impact': low_npv - base_npv,
-                'high_impact': high_npv - base_npv,
-                'swing': abs(high_npv - low_npv)
+            tornado_analysis.append({
+                'parameter': parameter,
+                'low_impact': low_net_present_value - base_net_present_value,
+                'high_impact': high_net_present_value - base_net_present_value,
+                'impact_range': abs(high_net_present_value - low_net_present_value)
             })
         
-        tornado_data.sort(key=lambda x: x['swing'], reverse=True)
+        tornado_analysis.sort(key=lambda x: x['impact_range'], reverse=True)
         
         return {
-            'scenario_analysis': sensitivity,
-            'tornado_analysis': tornado_data,
-            'base_case_npv': base_npv,
-            'npv_range': (sensitivity['low_case']['npv'], sensitivity['high_case']['npv']),
-            'confidence_interval': self._calculate_confidence_interval(sensitivity)
+            'scenario_analysis': scenario_analysis,
+            'tornado_analysis': tornado_analysis,
+            'base_net_present_value': base_net_present_value,
+            'net_present_value_range': (
+                scenario_analysis['pessimistic_case']['net_present_value'], 
+                scenario_analysis['optimistic_case']['net_present_value']),
+            'confidence_intervals': self._compute_confidence_intervals(scenario_analysis)
         }
     
-    def _calculate_confidence_interval(self, sensitivity: Dict) -> Dict:
-        npvs = [scenario['npv'] for scenario in sensitivity.values()]
-        mean_npv = np.mean(npvs)
-        std_npv = np.std(npvs)
+    def _compute_confidence_intervals(self, scenario_analysis: Dict) -> Dict:
+        """Compute statistical confidence intervals."""
+        net_present_values = [
+            scenario['net_present_value'] for scenario in scenario_analysis.values()]
         
         return {
-            'mean': mean_npv,
-            'std': std_npv,
-            'p10': np.percentile(npvs, 10),
-            'p50': np.percentile(npvs, 50),
-            'p90': np.percentile(npvs, 90)
+            'mean': np.mean(net_present_values),
+            'standard_deviation': np.std(net_present_values),
+            'percentile_10': np.percentile(net_present_values, 10),
+            'percentile_50': np.percentile(net_present_values, 50),
+            'percentile_90': np.percentile(net_present_values, 90)
         }
     
-    def _calculate_kpis(self, economic_results: Dict, production_forecast: Dict) -> Dict:
-        total_production = sum(production_forecast['annual_production'])
+    def _compute_performance_metrics(self, economic_results: Dict, 
+                                    production_forecast: Dict) -> Dict:
+        """Compute key performance indicators."""
+        total_production_volume = sum(production_forecast['annual_production'])
         
         return {
-            'production_per_well': total_production / len(self.data['wells']) if self.data['wells'] else 0,
-            'revenue_per_bbl': economic_results['revenue'] / total_production if total_production > 0 else 0,
-            'opex_per_bbl': economic_results['opex'] / total_production if total_production > 0 else 0,
-            'netback_per_bbl': (economic_results['revenue'] - economic_results['opex']) / total_production if total_production > 0 else 0,
-            'capex_per_bbl': economic_results['capex'] / total_production if total_production > 0 else 0,
+            'average_production_per_well': (
+                total_production_volume / len(self.reservoir_data['wells']) 
+                if self.reservoir_data['wells'] else 0),
+            'revenue_per_barrel': (
+                economic_results['total_revenue'] / total_production_volume 
+                if total_production_volume > 0 else 0),
+            'operating_cost_per_barrel': (
+                economic_results['operating_expenditure'] / total_production_volume 
+                if total_production_volume > 0 else 0),
+            'netback_per_barrel': (
+                (economic_results['total_revenue'] - economic_results['operating_expenditure']) / 
+                total_production_volume if total_production_volume > 0 else 0),
+            'capital_cost_per_barrel': (
+                economic_results['capital_expenditure'] / total_production_volume 
+                if total_production_volume > 0 else 0),
             'reserve_replacement_ratio': 1.0,
-            'production_decline_rate': self._calculate_decline_rate(production_forecast['annual_production'])
+            'annual_production_decline_rate': self._calculate_annual_decline_rate(
+                production_forecast['annual_production'])
         }
     
-    def _calculate_decline_rate(self, annual_production: np.ndarray) -> float:
+    def _calculate_annual_decline_rate(self, annual_production: np.ndarray) -> float:
+        """Calculate annual production decline rate."""
         if len(annual_production) < 2:
             return 0.0
         
-        decline_rates = []
-        for i in range(1, len(annual_production)):
-            if annual_production[i-1] > 0:
-                decline = (annual_production[i-1] - annual_production[i]) / annual_production[i-1]
-                decline_rates.append(decline)
+        annual_decline_rates = []
+        for year_index in range(1, len(annual_production)):
+            if annual_production[year_index - 1] > 0:
+                decline_rate = ((annual_production[year_index - 1] - 
+                               annual_production[year_index]) / 
+                               annual_production[year_index - 1])
+                annual_decline_rates.append(decline_rate)
         
-        return np.mean(decline_rates) * 100 if decline_rates else 0.0
+        return np.mean(annual_decline_rates) * 100 if annual_decline_rates else 0.0
     
-    def _dict_from_dataclass(self, obj):
-        if hasattr(obj, '__dict__'):
-            return {k: v for k, v in obj.__dict__.items() if not k.startswith('_')}
+    def _serialize_dataclass(self, data_class_instance):
+        """Convert dataclass instance to dictionary."""
+        if hasattr(data_class_instance, '__dict__'):
+            return {key: value for key, value in data_class_instance.__dict__.items() 
+                   if not key.startswith('_')}
         return {}
     
-    def _generate_error_results(self, error_msg: str) -> Dict:
+    def _generate_error_output(self, error_message: str) -> Dict:
+        """Generate error output structure."""
         return {
-            'error': error_msg,
+            'error': error_message,
             'reservoir_properties': {},
             'decline_analysis': {},
             'production_forecast': {},
             'economic_evaluation': {
-                'npv': 0,
-                'irr': 0,
-                'roi': 0,
-                'payback_period': float('inf')
+                'net_present_value': 0,
+                'internal_rate_of_return': 0,
+                'return_on_investment': 0,
+                'discounted_payback_period': float('inf')
             },
             'uncertainty_analysis': {},
-            'key_performance_indicators': {}
+            'performance_metrics': {}
         }
