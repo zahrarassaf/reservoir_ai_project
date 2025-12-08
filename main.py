@@ -11,46 +11,46 @@ from datetime import datetime
 import sys
 
 print("=" * 70)
-print("🎯 RESERVOIR SIMULATION PROJECT")
+print("RESERVOIR SIMULATION PROJECT")
 print("=" * 70)
 
 # 1. Check data files
-print("\n📁 Checking data files...")
+print("\nChecking data files...")
 data_dir = Path("data")
 if data_dir.exists():
     files = list(data_dir.glob("*"))
     print(f"Found {len(files)} files in data/ folder:")
     for f in files:
-        print(f"  📄 {f.name} ({f.stat().st_size/1024:.1f} KB)")
+        print(f"  {f.name} ({f.stat().st_size/1024:.1f} KB)")
 else:
-    print("⚠️  data/ folder not found, creating...")
+    print("Warning: data/ folder not found, creating...")
     data_dir.mkdir()
 
 # 2. Load SPE9 data
-print("\n📥 Loading SPE9 data...")
+print("\nLoading SPE9 data...")
 spe9_files = list(data_dir.glob("*SPE9*"))
 if spe9_files:
-    print(f"✅ Found SPE9 files: {[f.name for f in spe9_files]}")
+    print(f"Found SPE9 files: {[f.name for f in spe9_files]}")
     
     # Try to read first file
     try:
-        with open(spe9_files[0], 'r') as f:
+        with open(spe9_files[0], 'r', encoding='utf-8') as f:
             content = f.read(1000)  # Read first 1000 chars
             if 'RUNSPEC' in content and 'GRID' in content:
-                print("✅ Valid SPE9 format detected")
+                print("Valid SPE9 format detected")
                 is_real_data = True
             else:
-                print("⚠️  File doesn't look like standard SPE9")
+                print("File doesn't look like standard SPE9")
                 is_real_data = False
     except:
-        print("❌ Could not read file")
+        print("Could not read file")
         is_real_data = False
 else:
-    print("❌ No SPE9 files found in data/")
+    print("No SPE9 files found in data/")
     is_real_data = False
 
 # 3. Simple Reservoir Simulator
-print("\n⚡ Running reservoir simulation...")
+print("\nRunning reservoir simulation...")
 
 class SimpleReservoirSimulator:
     def __init__(self, use_real_data=False):
@@ -105,14 +105,14 @@ class SimpleReservoirSimulator:
 simulator = SimpleReservoirSimulator(use_real_data=is_real_data)
 results = simulator.run_simulation(days=3650)  # 10 years
 
-print(f"✅ Simulation completed")
+print(f"Simulation completed")
 print(f"   Grid: {results['grid_size']}")
 print(f"   Time steps: {len(results['time'])}")
 print(f"   Initial rate: {results['production']['oil'][0]:.0f} bpd")
 print(f"   Final rate: {results['production']['oil'][-1]:.0f} bpd")
 
 # 4. Economic Analysis
-print("\n💰 Running economic analysis...")
+print("\nRunning economic analysis...")
 
 class EconomicAnalyzer:
     def __init__(self, oil_price=82.5, operating_cost=16.5, discount_rate=0.095):
@@ -187,7 +187,7 @@ economics = analyzer.calculate_economics(
     years=15
 )
 
-print(f"✅ Economic analysis completed:")
+print(f"Economic analysis completed:")
 print(f"   NPV: ${economics['npv']/1e6:.2f}M")
 print(f"   IRR: {economics['irr']*100:.1f}%")
 print(f"   ROI: {economics['roi']:.1f}%")
@@ -195,7 +195,7 @@ print(f"   Payback: {economics['payback_years']:.1f} years")
 print(f"   Break-even: ${economics['break_even_price']:.1f}/bbl")
 
 # 5. Generate Visualizations
-print("\n📊 Generating visualizations...")
+print("\nGenerating visualizations...")
 
 # Create results directory
 results_dir = Path("results")
@@ -303,10 +303,10 @@ plot_file = results_dir / 'simulation_results.png'
 plt.savefig(plot_file, dpi=150, bbox_inches='tight')
 plt.close()
 
-print(f"✅ Visualization saved: {plot_file}")
+print(f"Visualization saved: {plot_file}")
 
 # 6. Save JSON report
-print("\n💾 Saving detailed report...")
+print("\nSaving detailed report...")
 
 report = {
     'metadata': {
@@ -338,16 +338,16 @@ report_file = results_dir / 'simulation_report.json'
 with open(report_file, 'w') as f:
     json.dump(report, f, indent=2)
 
-print(f"✅ Report saved: {report_file}")
+print(f"Report saved: {report_file}")
 
 # 7. Create HTML dashboard (simple)
-print("\n🌐 Generating HTML dashboard...")
+print("\nGenerating HTML dashboard...")
 
-html_content = f"""
-<!DOCTYPE html>
+html_content = f"""<!DOCTYPE html>
 <html>
 <head>
     <title>Reservoir Simulation Results</title>
+    <meta charset="UTF-8">
     <style>
         body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
         .container {{ max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.1); }}
@@ -366,10 +366,10 @@ html_content = f"""
 </head>
 <body>
     <div class="container">
-        <h1>🎯 Reservoir Simulation Results</h1>
+        <h1>Reservoir Simulation Results</h1>
         
         <div class="summary">
-            <h3>📊 Project Summary</h3>
+            <h3>Project Summary</h3>
             <p><strong>Data Source:</strong> {'REAL SPE9 Benchmark Dataset' if is_real_data else 'Synthetic Data'}</p>
             <p><strong>Grid Size:</strong> {results['grid_size']}</p>
             <p><strong>Total Cells:</strong> {results['total_cells']:,}</p>
@@ -408,12 +408,12 @@ html_content = f"""
         </div>
         
         <div class="plot">
-            <h3>📈 Simulation Results</h3>
+            <h3>Simulation Results</h3>
             <img src="simulation_results.png" alt="Simulation Results">
         </div>
         
         <div class="data-files">
-            <h3>📁 Data Files Used</h3>
+            <h3>Data Files Used</h3>
             <ul>
                 {"".join([f'<li>{f.name}</li>' for f in data_dir.glob("*")])}
             </ul>
@@ -425,42 +425,41 @@ html_content = f"""
         </div>
     </div>
 </body>
-</html>
-"""
+</html>"""
 
-# Save HTML
+# Save HTML with UTF-8 encoding
 html_file = results_dir / 'dashboard.html'
-with open(html_file, 'w') as f:
+with open(html_file, 'w', encoding='utf-8') as f:  # ✅ این خط اصلاح شده
     f.write(html_content)
 
-print(f"✅ Dashboard saved: {html_file}")
+print(f"Dashboard saved: {html_file}")
 
 # 8. Final Summary
 print("\n" + "=" * 70)
-print("🎉 PROJECT COMPLETED SUCCESSFULLY!")
+print("PROJECT COMPLETED SUCCESSFULLY!")
 print("=" * 70)
 
 print(f"""
-📊 FINAL RESULTS:
+FINAL RESULTS:
 {'='*30}
-✅ Data Analysis: {'REAL SPE9 data loaded' if is_real_data else 'Using synthetic data'}
-✅ Simulation: {results['grid_size']} grid for {results['time'][-1]/365:.1f} years
-✅ Economics: NPV ${economics['npv']/1e6:.2f}M, IRR {economics['irr']*100:.1f}%
-✅ Visualizations: 6 plots generated
-✅ Report: JSON and HTML reports created
+Data Analysis: {'REAL SPE9 data loaded' if is_real_data else 'Using synthetic data'}
+Simulation: {results['grid_size']} grid for {results['time'][-1]/365:.1f} years
+Economics: NPV ${economics['npv']/1e6:.2f}M, IRR {economics['irr']*100:.1f}%
+Visualizations: 6 plots generated
+Report: JSON and HTML reports created
 
-📁 OUTPUT FILES:
+OUTPUT FILES:
 {'='*30}
 1. {plot_file}
 2. {report_file}
 3. {html_file}
 
-🚀 NEXT STEPS:
+NEXT STEPS:
 {'='*30}
 1. Open {html_file} in browser
 2. Review {report_file} for details
 3. Add ML models (CNN/LSTM) for advanced analysis
 """)
 
-print("🎯 Project is ready for CV and portfolio!")
+print("Project is ready for CV and portfolio!")
 print("=" * 70)
