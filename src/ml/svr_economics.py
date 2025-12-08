@@ -1,474 +1,523 @@
 """
-Support Vector Regression for Economic Analysis
-PhD-Level ML for Economic Parameter Relationships
+Support Vector Regression for Economic Forecasting
+Predicts NPV, IRR, ROI from reservoir and economic parameters
 """
 
 import numpy as np
-from sklearn.svm import SVR
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
-from sklearn.multioutput import MultiOutputRegressor
 import pandas as pd
-from typing import Tuple, Dict, List, Optional, Any
+from sklearn.svm import SVR
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.preprocessing import StandardScaler, PolynomialFeatures
+from sklearn.model_selection import train_test_split, GridSearchCV, cross_val_score
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.pipeline import Pipeline
+import matplotlib.pyplot as plt
+import seaborn as sns
+from typing import Dict, List, Tuple, Union, Optional
+import joblib
 import warnings
 warnings.filterwarnings('ignore')
 
-class EconomicSVR:
-    """
-    Support Vector Regression for economic forecasting and sensitivity analysis.
-    Handles non-linear relationships between reservoir parameters and economic outcomes.
-    """
+
+class EconomicFeatureEngineer:
+    """Feature engineering for economic prediction"""
     
-    def __init__(self, 
-                 kernel: str = 'rbf',
-                 use_advanced_features: bool = True):
-        
-        self.kernel = kernel
-        self.use_advanced_features = use_advanced_features
-        
-        # Initialize scalers
-        self.scaler_X = StandardScaler()
-        self.scaler_y = StandardScaler()
-        
-        # Initialize SVR with optimized parameters
-        self.model = self._initialize_svr()
-        
-        # Feature importance storage
-        self.feature_importance = {}
-        self.feature_names = []
-    
-    def _initialize_svr(self) -> Any:
-        """Initialize SVR model with appropriate configuration."""
-        
-        if self.kernel == 'rbf':
-            base_model = SVR(
-                kernel='rbf',
-                C=100.0,  # Regularization parameter
-                epsilon=0.1,
-                gamma='scale',
-                cache_size=1000
-            )
-        elif self.kernel == 'poly':
-            base_model = SVR(
-                kernel='poly',
-                C=10.0,
-                epsilon=0.1,
-                degree=3,
-                coef0=1.0,
-                gamma='scale'
-            )
-        else:  # linear
-            base_model = SVR(
-                kernel='linear',
-                C=1.0,
-                epsilon=0.1
-            )
-        
-        return base_model
-    
-    def prepare_features(self,
-                        reservoir_data: np.ndarray,
-                        production_data: np.ndarray,
-                        well_data: List[Dict]) -> pd.DataFrame:
+    @staticmethod
+    def create_features(reservoir_params: Dict[str, float], 
+                       economic_params: Dict[str, float]) -> pd.DataFrame:
         """
-        Engineer advanced features for economic prediction.
-        PhD-Level feature engineering.
-        """
-        print("🔧 Engineering features for SVR analysis...")
-        
-        features = pd.DataFrame()
-        
-        # 1. Reservoir Quality Features
-        if len(reservoir_data) > 0:
-            features['avg_porosity'] = [np.mean(reservoir_data.get('porosity', [0.2]))]
-            features['avg_permeability'] = [np.mean(reservoir_data.get('permeability', [100]))]
-            features['perm_std'] = [np.std(reservoir_data.get('permeability', [100]))]
-            features['perm_skew'] = [self._calculate_skewness(reservoir_data.get('permeability', [100]))]
-            
-            # Reservoir heterogeneity index
-            features['heterogeneity_index'] = [
-                features['perm_std'].iloc[0] / (features['avg_permeability'].iloc[0] + 1e-10)
-            ]
-        
-        # 2. Production Characteristics
-        if len(production_data) > 0:
-            oil_rate = production_data.get('oil_rate', [0])
-            water_rate = production_data.get('water_rate', [0])
-            
-            if len(oil_rate) > 1:
-                features['initial_rate'] = [oil_rate[0]]
-                features['decline_rate'] = [self._calculate_decline_rate(oil_rate)]
-                features['peak_rate'] = [np.max(oil_rate)]
-                features['water_cut_trend'] = [self._calculate_trend(water_rate / (oil_rate + 1e-10))]
-                
-                # Production efficiency metrics
-                features['recovery_efficiency'] = [
-                    np.sum(oil_rate[:365]) / (features['initial_rate'].iloc[0] * 365 + 1e-10)
-                ]
-        
-        # 3. Well Configuration Features
-        if well_data:
-            features['well_count'] = [len(well_data)]
-            features['prod_well_ratio'] = [
-                sum(1 for w in well_data if w.get('type') == 'PRODUCER') / len(well_data)
-            ]
-            
-            # Well spacing metrics
-            if len(well_data) > 1:
-                spacing = self._calculate_well_spacing(well_data)
-                features['avg_well_spacing'] = [np.mean(spacing)]
-                features['well_spacing_std'] = [np.std(spacing)]
-        
-        # 4. Economic Sensitivity Features
-        features['price_volatility_index'] = [0.25]  # Placeholder for real volatility data
-        features['opex_efficiency'] = [1.0]  # Placeholder
-        
-        # 5. Advanced PhD-Level Features
-        if self.use_advanced_features:
-            # Recovery factor estimate
-            if 'avg_porosity' in features.columns and 'avg_permeability' in features.columns:
-                features['recovery_factor_estimate'] = [
-                    0.35 * (features['avg_porosity'].iloc[0] / 0.2) * 
-                    np.log1p(features['avg_permeability'].iloc[0] / 100)
-                ]
-            
-            # Economic resilience index
-            features['economic_resilience'] = [
-                features.get('recovery_factor_estimate', [0.35])[0] *
-                (1 - features.get('heterogeneity_index', [0.5])[0])
-            ]
-        
-        print(f"✅ Engineered {features.shape[1]} features for SVR analysis")
-        self.feature_names = features.columns.tolist()
-        
-        return features
-    
-    def train(self, 
-              X: pd.DataFrame,
-              y: pd.DataFrame,
-              optimize_hyperparams: bool = True):
-        """
-        Train SVR model with optional hyperparameter optimization.
+        Create engineered features from reservoir and economic parameters
         
         Args:
-            X: Feature matrix (n_samples × n_features)
-            y: Target matrix (n_samples × n_targets)
-            optimize_hyperparams: Whether to perform grid search
+            reservoir_params: Dictionary of reservoir parameters
+            economic_params: Dictionary of economic parameters
+        
+        Returns:
+            DataFrame with engineered features
         """
-        print("\n🧠 Training Support Vector Regression model...")
         
-        # Scale features and targets
-        X_scaled = self.scaler_X.fit_transform(X)
-        y_scaled = self.scaler_y.fit_transform(y)
+        features = {}
         
-        # Hyperparameter optimization
-        if optimize_hyperparams and X.shape[0] > 10:
-            print("   Optimizing hyperparameters...")
-            self.model = self._optimize_hyperparameters(X_scaled, y_scaled)
+        # Basic reservoir features
+        features['porosity'] = reservoir_params.get('porosity', 0.2)
+        features['permeability'] = reservoir_params.get('permeability', 100)
+        features['oil_in_place'] = reservoir_params.get('oil_in_place', 1e6)
+        features['recoverable_oil'] = reservoir_params.get('recoverable_oil', 3e5)
+        features['water_cut'] = reservoir_params.get('water_cut', 0.3)
+        
+        # Basic economic features
+        features['oil_price'] = economic_params.get('oil_price', 60)
+        features['opex_per_bbl'] = economic_params.get('opex_per_bbl', 15)
+        features['capex'] = economic_params.get('capex', 20e6)
+        features['discount_rate'] = economic_params.get('discount_rate', 0.1)
+        features['tax_rate'] = economic_params.get('tax_rate', 0.3)
+        
+        # Engineered features
+        # 1. Productivity indices
+        features['productivity_index'] = features['permeability'] * features['porosity']
+        features['recovery_factor'] = features['recoverable_oil'] / features['oil_in_place']
+        
+        # 2. Economic ratios
+        features['price_cost_ratio'] = features['oil_price'] / features['opex_per_bbl']
+        features['capex_per_bbl'] = features['capex'] / features['recoverable_oil']
+        
+        # 3. Time value features
+        features['discounted_production'] = features['recoverable_oil'] / (1 + features['discount_rate'])
+        
+        # 4. Risk metrics
+        features['water_risk'] = features['water_cut'] * features['opex_per_bbl']
+        features['price_risk'] = features['oil_price'] * features['discount_rate']
+        
+        # 5. Composite metrics
+        features['profitability_potential'] = (
+            features['recoverable_oil'] * features['oil_price'] * 
+            (1 - features['water_cut']) / features['capex']
+        )
+        
+        # 6. Technical-economic hybrids
+        features['net_pay_productivity'] = (
+            features['porosity'] * features['permeability'] * 
+            features['oil_price'] / features['opex_per_bbl']
+        )
+        
+        # 7. Efficiency metrics
+        features['operational_efficiency'] = (
+            (1 - features['water_cut']) * features['price_cost_ratio']
+        )
+        
+        # 8. Risk-adjusted returns
+        features['risk_adjusted_npv'] = (
+            features['recoverable_oil'] * features['oil_price'] *
+            (1 - features['tax_rate']) / 
+            (features['capex'] * (1 + features['discount_rate']))
+        )
+        
+        # 9. Break-even features
+        features['break_even_price'] = (
+            features['opex_per_bbl'] + 
+            (features['capex'] * features['discount_rate'] / features['recoverable_oil'])
+        )
+        
+        # 10. Sensitivity features
+        features['price_sensitivity'] = features['oil_price'] - features['break_even_price']
+        features['opex_sensitivity'] = features['opex_per_bbl'] / features['oil_price']
+        
+        return pd.DataFrame([features])
+
+
+class SVREconomicPredictor:
+    """
+    Advanced SVR-based economic predictor with feature engineering
+    Predicts key economic indicators from reservoir parameters
+    """
+    
+    def __init__(self, model_type='svr', use_polynomial_features=True):
+        """
+        Args:
+            model_type: 'svr', 'random_forest', or 'gradient_boosting'
+            use_polynomial_features: Whether to add polynomial features
+        """
+        self.model_type = model_type
+        self.use_polynomial_features = use_polynomial_features
+        self.scalers = {}
+        self.models = {}
+        self.feature_importance = {}
+        self.best_params = {}
+        
+        # Target variables
+        self.targets = ['npv', 'irr', 'roi', 'payback_period', 'break_even_price']
+    
+    def prepare_data(self, X_data: pd.DataFrame, y_data: pd.DataFrame) -> Tuple:
+        """
+        Prepare and split data
+        
+        Args:
+            X_data: Feature DataFrame
+            y_data: Target DataFrame
+        
+        Returns:
+            Split data
+        """
+        # Handle missing values
+        X_data = X_data.fillna(X_data.mean())
+        y_data = y_data.fillna(y_data.mean())
+        
+        # Split data
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_data, y_data, test_size=0.2, random_state=42
+        )
+        
+        return X_train, X_test, y_train, y_test
+    
+    def create_pipeline(self, target_name: str) -> Pipeline:
+        """Create ML pipeline for a specific target"""
+        
+        if self.model_type == 'svr':
+            base_model = SVR(kernel='rbf', C=100, gamma='scale', epsilon=0.1)
+            param_grid = {
+                'model__C': [0.1, 1, 10, 100, 1000],
+                'model__gamma': ['scale', 'auto', 0.01, 0.1, 1],
+                'model__epsilon': [0.01, 0.1, 0.5]
+            }
+        
+        elif self.model_type == 'random_forest':
+            base_model = RandomForestRegressor(n_estimators=100, random_state=42)
+            param_grid = {
+                'model__n_estimators': [50, 100, 200],
+                'model__max_depth': [None, 10, 20, 30],
+                'model__min_samples_split': [2, 5, 10]
+            }
+        
+        elif self.model_type == 'gradient_boosting':
+            base_model = GradientBoostingRegressor(n_estimators=100, random_state=42)
+            param_grid = {
+                'model__n_estimators': [50, 100, 200],
+                'model__learning_rate': [0.01, 0.1, 0.2],
+                'model__max_depth': [3, 5, 7]
+            }
+        
         else:
-            # Train with default parameters
-            if y.shape[1] > 1:
-                self.model = MultiOutputRegressor(self.model)
-            
-            self.model.fit(X_scaled, y_scaled)
-            print("   Training completed with default parameters")
+            raise ValueError(f"Unknown model type: {self.model_type}")
         
-        # Calculate feature importance
-        self._calculate_feature_importance(X_scaled, y_scaled)
+        # Create pipeline
+        steps = [('scaler', StandardScaler())]
         
-        # Calculate performance metrics
-        train_score = self.model.score(X_scaled, y_scaled)
-        print(f"✅ SVR training completed. R² score: {train_score:.4f}")
+        if self.use_polynomial_features:
+            steps.append(('poly', PolynomialFeatures(degree=2, include_bias=False)))
         
-        if hasattr(self.model, 'best_params_'):
-            print(f"   Best parameters: {self.model.best_params_}")
+        steps.append(('model', base_model))
+        pipeline = Pipeline(steps)
+        
+        return pipeline, param_grid
     
-    def predict_economics(self,
-                         features: pd.DataFrame,
-                         return_confidence: bool = True) -> Dict:
+    def train(self, X_train: pd.DataFrame, y_train: pd.DataFrame, 
+              cv_folds: int = 5, n_jobs: int = -1):
         """
-        Predict economic metrics with optional confidence intervals.
+        Train models for all targets
+        
+        Args:
+            X_train: Training features
+            y_train: Training targets
+            cv_folds: Cross-validation folds
+            n_jobs: Number of parallel jobs
         """
-        # Scale features
-        X_scaled = self.scaler_X.transform(features)
         
-        # Make predictions
-        y_pred_scaled = self.model.predict(X_scaled)
+        print(f"Training {self.model_type.upper()} models for economic prediction...")
+        print(f"Features: {X_train.shape[1]}, Samples: {X_train.shape[0]}")
         
-        # Inverse transform
-        y_pred = self.scaler_y.inverse_transform(y_pred_scaled)
-        
-        # Prepare results
-        results = {
-            'npv': float(y_pred[0, 0]) if y_pred.shape[1] >= 1 else 0.0,
-            'irr': float(y_pred[0, 1]) if y_pred.shape[1] >= 2 else 0.0,
-            'roi': float(y_pred[0, 2]) if y_pred.shape[1] >= 3 else 0.0,
-            'payback_period': float(y_pred[0, 3]) if y_pred.shape[1] >= 4 else 0.0,
-            'predictions_raw': y_pred.tolist()
-        }
-        
-        # Add confidence intervals if requested
-        if return_confidence:
-            confidence = self._calculate_confidence_intervals(X_scaled)
-            results['confidence_intervals'] = confidence
-        
-        return results
+        for target in self.targets:
+            if target in y_train.columns:
+                print(f"\nTraining for {target.upper()}...")
+                
+                # Create pipeline
+                pipeline, param_grid = self.create_pipeline(target)
+                
+                # Grid search with cross-validation
+                grid_search = GridSearchCV(
+                    pipeline, param_grid, 
+                    cv=cv_folds, 
+                    scoring='neg_mean_squared_error',
+                    n_jobs=n_jobs,
+                    verbose=0
+                )
+                
+                # Train
+                grid_search.fit(X_train, y_train[target])
+                
+                # Store best model
+                self.models[target] = grid_search.best_estimator_
+                self.best_params[target] = grid_search.best_params_
+                
+                # Cross-validation scores
+                cv_scores = cross_val_score(
+                    grid_search.best_estimator_, 
+                    X_train, y_train[target], 
+                    cv=cv_folds, 
+                    scoring='r2'
+                )
+                
+                print(f"  Best params: {grid_search.best_params_}")
+                print(f"  CV R²: {cv_scores.mean():.4f} (±{cv_scores.std():.4f})")
+                
+                # Feature importance (for tree-based models)
+                if hasattr(grid_search.best_estimator_.named_steps['model'], 'feature_importances_'):
+                    importance = grid_search.best_estimator_.named_steps['model'].feature_importances_
+                    feature_names = X_train.columns
+                    
+                    # Handle polynomial features
+                    if self.use_polynomial_features:
+                        poly = grid_search.best_estimator_.named_steps['poly']
+                        feature_names = poly.get_feature_names_out(X_train.columns)
+                    
+                    self.feature_importance[target] = pd.DataFrame({
+                        'feature': feature_names,
+                        'importance': importance
+                    }).sort_values('importance', ascending=False)
     
-    def sensitivity_analysis(self,
-                            base_features: pd.DataFrame,
-                            parameter_ranges: Dict[str, Tuple[float, float]],
-                            n_points: int = 20) -> pd.DataFrame:
+    def predict(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Predict all economic indicators"""
+        
+        predictions = {}
+        for target, model in self.models.items():
+            predictions[target] = model.predict(X)
+        
+        return pd.DataFrame(predictions, index=X.index)
+    
+    def evaluate(self, X_test: pd.DataFrame, y_test: pd.DataFrame) -> Dict:
+        """Evaluate model performance"""
+        
+        predictions = self.predict(X_test)
+        
+        metrics = {}
+        for target in self.targets:
+            if target in y_test.columns:
+                y_true = y_test[target]
+                y_pred = predictions[target]
+                
+                metrics[target] = {
+                    'MAE': mean_absolute_error(y_true, y_pred),
+                    'RMSE': np.sqrt(mean_squared_error(y_true, y_pred)),
+                    'R2': r2_score(y_true, y_pred),
+                    'MAPE': np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+                }
+        
+        return metrics
+    
+    def feature_analysis(self, X_train: pd.DataFrame):
+        """Analyze feature importance and correlations"""
+        
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+        
+        # 1. Feature correlations
+        corr_matrix = X_train.corr()
+        sns.heatmap(corr_matrix, ax=axes[0, 0], cmap='coolwarm', center=0,
+                   square=True, cbar_kws={'shrink': 0.8})
+        axes[0, 0].set_title('Feature Correlation Matrix')
+        
+        # 2. Feature importance for each target
+        for idx, target in enumerate(self.targets[:4]):
+            if target in self.feature_importance:
+                ax = axes[(idx+1)//3, (idx+1)%3]
+                top_features = self.feature_importance[target].head(10)
+                ax.barh(top_features['feature'], top_features['importance'])
+                ax.set_title(f'Top Features - {target.upper()}')
+                ax.set_xlabel('Importance')
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # Print top features
+        print("\n" + "="*50)
+        print("TOP FEATURES FOR EACH TARGET:")
+        print("="*50)
+        
+        for target in self.targets:
+            if target in self.feature_importance:
+                print(f"\n{target.upper()}:")
+                top5 = self.feature_importance[target].head(5)
+                for _, row in top5.iterrows():
+                    print(f"  {row['feature']}: {row['importance']:.4f}")
+    
+    def economic_sensitivity_analysis(self, base_features: pd.DataFrame, 
+                                     parameter: str, 
+                                     values: np.ndarray,
+                                     target: str = 'npv'):
         """
-        Perform comprehensive sensitivity analysis using SVR.
+        Perform sensitivity analysis for economic parameters
         
         Args:
             base_features: Base case feature vector
-            parameter_ranges: Dictionary of parameter ranges
-            n_points: Number of points per parameter
+            parameter: Parameter to vary
+            values: Array of parameter values
+            target: Target variable to analyze
+        """
+        
+        if target not in self.models:
+            print(f"Model for {target} not found!")
+            return
+        
+        sensitivities = []
+        for value in values:
+            # Modify parameter
+            features = base_features.copy()
+            if parameter in features.columns:
+                features[parameter] = value
+            
+            # Predict
+            pred = self.models[target].predict(features)[0]
+            sensitivities.append(pred)
+        
+        # Plot sensitivity
+        plt.figure(figsize=(10, 6))
+        plt.plot(values, sensitivities, 'b-o', linewidth=2, markersize=8)
+        plt.axhline(y=sensitivities[len(values)//2], color='r', linestyle='--', alpha=0.5)
+        plt.xlabel(parameter.replace('_', ' ').title())
+        plt.ylabel(target.upper())
+        plt.title(f'Sensitivity Analysis: {target.upper()} vs {parameter.replace("_", " ").title()}')
+        plt.grid(True, alpha=0.3)
+        plt.show()
+        
+        # Calculate sensitivity index
+        base_value = sensitivities[len(values)//2]
+        max_change = np.max(np.abs(np.array(sensitivities) - base_value))
+        sensitivity_index = max_change / base_value * 100
+        
+        print(f"\nSensitivity Analysis Results:")
+        print(f"Parameter: {parameter}")
+        print(f"Target: {target}")
+        print(f"Base {target}: ${base_value:,.2f}")
+        print(f"Maximum change: ${max_change:,.2f}")
+        print(f"Sensitivity Index: {sensitivity_index:.2f}%")
+        
+        return sensitivities
+    
+    def scenario_analysis(self, scenarios: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+        """
+        Analyze multiple economic scenarios
+        
+        Args:
+            scenarios: Dictionary of scenario names and feature DataFrames
         
         Returns:
-            DataFrame with sensitivity results
+            DataFrame with scenario results
         """
-        print("\n📈 Performing SVR-based sensitivity analysis...")
         
-        results = []
+        results = {}
+        for scenario_name, features in scenarios.items():
+            predictions = self.predict(features)
+            results[scenario_name] = predictions.mean().to_dict()
         
-        for param_name, (low, high) in parameter_ranges.items():
-            if param_name not in base_features.columns:
-                print(f"⚠️  Parameter {param_name} not in features, skipping")
-                continue
-            
-            print(f"   Analyzing {param_name}...")
-            values = np.linspace(low, high, n_points)
-            
-            for value in values:
-                # Modify the parameter
-                modified_features = base_features.copy()
-                modified_features[param_name] = value
-                
-                # Predict economic metrics
-                predictions = self.predict_economics(modified_features, return_confidence=False)
-                
-                results.append({
-                    'parameter': param_name,
-                    'value': value,
-                    'npv': predictions['npv'],
-                    'irr': predictions['irr'],
-                    'roi': predictions['roi'],
-                    'payback': predictions['payback_period'],
-                    'npv_change_percent': ((predictions['npv'] - predictions['npv']) / 
-                                          abs(predictions['npv'] + 1e-10) * 100)
-                })
-        
-        results_df = pd.DataFrame(results)
-        
-        # Calculate sensitivity coefficients
-        sensitivity_coeffs = {}
-        for param in parameter_ranges.keys():
-            param_results = results_df[results_df['parameter'] == param]
-            if len(param_results) > 1:
-                # Calculate elasticity: % change in NPV / % change in parameter
-                npv_elasticity = (
-                    (param_results['npv'].max() - param_results['npv'].min()) /
-                    (param_results['value'].max() - param_results['value'].min()) *
-                    (param_results['value'].mean() / (param_results['npv'].mean() + 1e-10))
-                )
-                sensitivity_coeffs[param] = float(npv_elasticity)
-        
-        print(f"✅ Sensitivity analysis completed. Most sensitive: {max(sensitivity_coeffs, key=sensitivity_coeffs.get)}")
-        
-        return results_df, sensitivity_coeffs
+        return pd.DataFrame(results).T
     
-    def calculate_break_even(self,
-                           features: pd.DataFrame,
-                           target_irr: float = 0.15,
-                           max_iter: int = 100) -> Dict:
-        """
-        Calculate break-even price using SVR optimization.
-        """
-        print("\n💰 Calculating break-even price with SVR...")
-        
-        # Use Brent's method for root finding
-        from scipy.optimize import brentq
-        
-        def objective(price: float) -> float:
-            """Objective function: IRR - target_IRR"""
-            modified_features = features.copy()
-            modified_features['oil_price_sensitivity'] = price / 100
-            
-            predictions = self.predict_economics(modified_features, return_confidence=False)
-            return predictions['irr'] - target_irr
-        
-        try:
-            # Find root (price where IRR = target)
-            price_low = 20.0
-            price_high = 200.0
-            
-            # Check bounds
-            if objective(price_low) * objective(price_high) > 0:
-                print("⚠️  Cannot find break-even within range")
-                break_even_price = features.get('oil_price_sensitivity', [82.5])[0] * 100
-            else:
-                break_even_price = brentq(objective, price_low, price_high, maxiter=max_iter)
-            
-            # Get metrics at break-even
-            features_be = features.copy()
-            features_be['oil_price_sensitivity'] = break_even_price / 100
-            metrics_be = self.predict_economics(features_be, return_confidence=False)
-            
-            result = {
-                'break_even_price': float(break_even_price),
-                'npv_at_be': metrics_be['npv'],
-                'irr_at_be': metrics_be['irr'],
-                'roi_at_be': metrics_be['roi'],
-                'safety_margin': ((82.5 - break_even_price) / 82.5 * 100),  # Current price = 82.5
-                'calculation_method': 'SVR Optimization'
-            }
-            
-            print(f"✅ Break-even price: ${break_even_price:.2f}/bbl")
-            print(f"   Safety margin: {result['safety_margin']:.1f}%")
-            
-            return result
-            
-        except Exception as e:
-            print(f"❌ Error calculating break-even: {e}")
-            return {
-                'break_even_price': 82.5,
-                'error': str(e),
-                'calculation_method': 'Failed - using default'
-            }
-    
-    def _optimize_hyperparameters(self, X: np.ndarray, y: np.ndarray) -> Any:
-        """Optimize SVR hyperparameters using grid search."""
-        
-        param_grid = {
-            'C': [0.1, 1, 10, 100, 1000],
-            'epsilon': [0.01, 0.1, 0.5, 1.0],
-            'gamma': ['scale', 'auto', 0.1, 1, 10]
+    def save_model(self, path='svr_economic_model.joblib'):
+        """Save the entire model"""
+        model_data = {
+            'models': self.models,
+            'best_params': self.best_params,
+            'feature_importance': self.feature_importance,
+            'targets': self.targets,
+            'model_type': self.model_type,
+            'use_polynomial_features': self.use_polynomial_features
         }
-        
-        if self.kernel == 'poly':
-            param_grid['degree'] = [2, 3, 4]
-            param_grid['coef0'] = [0.0, 1.0]
-        
-        # Use time series cross-validation
-        cv = TimeSeriesSplit(n_splits=5)
-        
-        if y.shape[1] > 1:
-            # Multi-output regression
-            base_model = SVR(kernel=self.kernel)
-            model = MultiOutputRegressor(
-                GridSearchCV(
-                    base_model,
-                    param_grid=param_grid,
-                    cv=cv,
-                    scoring='neg_mean_squared_error',
-                    n_jobs=-1,
-                    verbose=0
-                )
-            )
-        else:
-            # Single output
-            model = GridSearchCV(
-                SVR(kernel=self.kernel),
-                param_grid=param_grid,
-                cv=cv,
-                scoring='neg_mean_squared_error',
-                n_jobs=-1,
-                verbose=1
-            )
-        
-        model.fit(X, y)
-        return model
+        joblib.dump(model_data, path)
+        print(f"Model saved to {path}")
     
-    def _calculate_feature_importance(self, X: np.ndarray, y: np.ndarray):
-        """Calculate feature importance for SVR."""
-        if hasattr(self.model, 'coef_'):
-            # Linear kernel has coefficients
-            if y.shape[1] == 1:
-                importance = np.abs(self.model.coef_[0])
-            else:
-                importance = np.mean(np.abs(self.model.coef_), axis=0)
-        else:
-            # For non-linear kernels, use permutation importance
-            from sklearn.inspection import permutation_importance
-            
-            result = permutation_importance(
-                self.model, X, y,
-                n_repeats=10,
-                random_state=42
-            )
-            importance = result.importances_mean
-        
-        # Normalize importance
-        if len(importance) > 0:
-            importance = importance / np.sum(importance)
-            self.feature_importance = dict(zip(self.feature_names, importance))
+    def load_model(self, path='svr_economic_model.joblib'):
+        """Load saved model"""
+        model_data = joblib.load(path)
+        self.models = model_data['models']
+        self.best_params = model_data['best_params']
+        self.feature_importance = model_data['feature_importance']
+        self.targets = model_data['targets']
+        self.model_type = model_data['model_type']
+        self.use_polynomial_features = model_data['use_polynomial_features']
+        print(f"Model loaded from {path}")
+
+
+# Example usage with synthetic data
+if __name__ == "__main__":
+    # Generate synthetic data for demonstration
+    np.random.seed(42)
+    n_samples = 1000
     
-    def _calculate_confidence_intervals(self, X: np.ndarray) -> Dict:
-        """Calculate confidence intervals using various methods."""
-        # Simplified confidence interval calculation
-        # In production, use bootstrapping or Bayesian methods
-        
-        predictions = []
-        n_bootstrap = 100
-        
-        # Bootstrap predictions
-        for _ in range(n_bootstrap):
-            # Create bootstrap sample
-            n_samples = X.shape[0]
-            indices = np.random.choice(n_samples, n_samples, replace=True)
-            X_boot = X[indices]
-            
-            # Predict (simplified - in reality need to retrain)
-            pred = self.model.predict(X_boot.mean(axis=0, keepdims=True))
-            predictions.append(pred.flatten())
-        
-        predictions = np.array(predictions)
-        
-        return {
-            'mean': predictions.mean(axis=0).tolist(),
-            'std': predictions.std(axis=0).tolist(),
-            'ci_95_lower': np.percentile(predictions, 2.5, axis=0).tolist(),
-            'ci_95_upper': np.percentile(predictions, 97.5, axis=0).tolist(),
-            'method': 'bootstrap',
-            'n_bootstrap': n_bootstrap
-        }
+    # Reservoir parameters
+    reservoir_data = {
+        'porosity': np.random.uniform(0.1, 0.3, n_samples),
+        'permeability': np.random.lognormal(3, 0.5, n_samples),
+        'oil_in_place': np.random.uniform(1e6, 10e6, n_samples),
+        'recoverable_oil': np.random.uniform(0.2e6, 3e6, n_samples),
+        'water_cut': np.random.uniform(0.1, 0.6, n_samples)
+    }
     
-    # Helper methods for feature engineering
-    def _calculate_decline_rate(self, rates: np.ndarray) -> float:
-        """Calculate decline rate from production data."""
-        if len(rates) < 2:
-            return 0.0
-        log_rates = np.log(rates + 1e-10)
-        time = np.arange(len(rates))
-        slope, _ = np.polyfit(time, log_rates, 1)
-        return abs(slope)
+    # Economic parameters
+    economic_data = {
+        'oil_price': np.random.uniform(40, 100, n_samples),
+        'opex_per_bbl': np.random.uniform(10, 30, n_samples),
+        'capex': np.random.uniform(10e6, 50e6, n_samples),
+        'discount_rate': np.random.uniform(0.05, 0.15, n_samples),
+        'tax_rate': np.random.uniform(0.2, 0.4, n_samples)
+    }
     
-    def _calculate_trend(self, data: np.ndarray) -> float:
-        """Calculate linear trend coefficient."""
-        if len(data) < 2:
-            return 0.0
-        time = np.arange(len(data))
-        slope, _ = np.polyfit(time, data, 1)
-        return slope
+    # Combine features
+    feature_engineer = EconomicFeatureEngineer()
+    X_data = []
     
-    def _calculate_skewness(self, data: np.ndarray) -> float:
-        """Calculate skewness of data."""
-        if len(data) < 3:
-            return 0.0
-        from scipy.stats import skew
-        return float(skew(data))
+    for i in range(n_samples):
+        reservoir_params = {k: v[i] for k, v in reservoir_data.items()}
+        economic_params = {k: v[i] for k, v in economic_data.items()}
+        features = feature_engineer.create_features(reservoir_params, economic_params)
+        X_data.append(features)
     
-    def _calculate_well_spacing(self, wells: List[Dict]) -> List[float]:
-        """Calculate distances between wells."""
-        if len(wells) < 2:
-            return [0.0]
+    X = pd.concat(X_data, ignore_index=True)
+    
+    # Generate synthetic targets (simplified formulas)
+    y_data = pd.DataFrame({
+        'npv': (
+            X['recoverable_oil'] * (X['oil_price'] - X['opex_per_bbl']) * 
+            (1 - X['tax_rate']) / (1 + X['discount_rate']) - X['capex']
+        ) / 1e6,  # in millions
         
-        distances = []
-        locations = [(w.get('i', 0), w.get('j', 0)) for w in wells]
+        'irr': np.random.uniform(0.05, 0.25, n_samples) * 100,  # in percent
         
-        for i in range(len(locations)):
-            for j in range(i + 1, len(locations)):
-                dx = locations[i][0] - locations[j][0]
-                dy = locations[i][1] - locations[j][1]
+        'roi': (
+            (X['recoverable_oil'] * X['oil_price'] * 0.7 - X['capex']) / X['capex']
+        ) * 100,  # in percent
+        
+        'payback_period': np.random.uniform(1, 10, n_samples),  # in years
+        
+        'break_even_price': X['opex_per_bbl'] + (X['capex'] * 0.1 / X['recoverable_oil'])
+    })
+    
+    # Create and train predictor
+    predictor = SVREconomicPredictor(model_type='random_forest', use_polynomial_features=True)
+    X_train, X_test, y_train, y_test = predictor.prepare_data(X, y_data)
+    
+    # Train
+    predictor.train(X_train, y_train)
+    
+    # Evaluate
+    metrics = predictor.evaluate(X_test, y_test)
+    
+    print("\n" + "="*50)
+    print("MODEL PERFORMANCE METRICS:")
+    print("="*50)
+    
+    for target, target_metrics in metrics.items():
+        print(f"\n{target.upper()}:")
+        for metric_name, value in target_metrics.items():
+            print(f"  {metric_name}: {value:.4f}")
+    
+    # Feature analysis
+    predictor.feature_analysis(X_train)
+    
+    # Sensitivity analysis example
+    print("\n" + "="*50)
+    print("ECONOMIC SENSITIVITY ANALYSIS:")
+    print("="*50)
+    
+    base_case = X_train.iloc[[0]]  # Use first sample as base case
+    oil_prices = np.linspace(40, 100, 20)
+    
+    predictor.economic_sensitivity_analysis(
+        base_case, 'oil_price', oil_prices, target='npv'
+    )
+    
+    # Scenario analysis
+    print("\n" + "="*50)
+    print("SCENARIO ANALYSIS:")
+    print("="*50)
+    
+    scenarios = {
+        'Base Case': base_case,
+        'High Price': base_case.assign(oil_price=100),
+        'Low Price': base_case.assign(oil_price=40),
+        'High Cost': base_case.assign(opex_per_bbl=30),
+        'Low Cost': base_case.assign(opex_per_bbl=10)
+    }
+    
+    scenario_results = predictor.scenario_analysis(scenarios)
+    print("\nScenario Results:")
+    print(scenario_results.round(2))
+    
+    # Save model
+    predictor.save_model('economic_predictor_model.joblib')
