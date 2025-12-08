@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Reservoir AI Project - REAL SPE9 Data Analysis
+Reservoir Simulation - SPE9 Data Analysis
 With ML integration for enhanced reservoir simulation
 """
 
@@ -28,7 +28,7 @@ except ImportError as e:
     ML_AVAILABLE = False
 
 print("=" * 70)
-print("🎯 PhD RESERVOIR SIMULATION - REAL DATA ANALYSIS WITH ML")
+print("RESERVOIR SIMULATION - SPE9 DATA ANALYSIS")
 print("=" * 70)
 
 class RealSPE9DataLoader:
@@ -37,7 +37,7 @@ class RealSPE9DataLoader:
         self.data_dir = Path(data_dir)
         
     def load_all_data(self):
-        print("\n📥 Loading REAL SPE9 datasets...")
+        print("\nLoading SPE9 datasets...")
         
         results = {
             'is_real_data': True,
@@ -50,43 +50,43 @@ class RealSPE9DataLoader:
         files = list(self.data_dir.glob("*"))
         results['files_found'] = [f.name for f in files]
         
-        print(f"📁 Found {len(files)} data files:")
+        print(f"Found {len(files)} data files:")
         for f in files:
             size_mb = f.stat().st_size / 1024
-            print(f"   📄 {f.name:30} {size_mb:6.1f} KB")
+            print(f"   {f.name:30} {size_mb:6.1f} KB")
         
         if (self.data_dir / "SPE9.GRDECL").exists():
-            print("\n🔍 Parsing SPE9.GRDECL (REAL grid data)...")
+            print("\nParsing SPE9.GRDECL (grid data)...")
             grid_data = self._parse_grdecl(self.data_dir / "SPE9.GRDECL")
             results['grid_info'] = grid_data
-            print(f"   ✅ Grid: {grid_data['dimensions']} = {grid_data['total_cells']:,} cells")
+            print(f"   Grid: {grid_data['dimensions']} = {grid_data['total_cells']:,} cells")
         
         if (self.data_dir / "PERMVALUES.DATA").exists():
-            print("🔍 Parsing PERMVALUES.DATA...")
+            print("Parsing PERMVALUES.DATA...")
             perm_data = self._parse_values_file(self.data_dir / "PERMVALUES.DATA")
             results['properties']['permeability'] = perm_data
-            print(f"   ✅ Permeability: {len(perm_data)} values loaded")
+            print(f"   Permeability: {len(perm_data)} values loaded")
         
         if (self.data_dir / "TOPSVALUES.DATA").exists():
-            print("🔍 Parsing TOPSVALUES.DATA...")
+            print("Parsing TOPSVALUES.DATA...")
             tops_data = self._parse_values_file(self.data_dir / "TOPSVALUES.DATA")
             results['properties']['tops'] = tops_data
-            print(f"   ✅ Tops: {len(tops_data)} values loaded")
+            print(f"   Tops: {len(tops_data)} values loaded")
         
         if (self.data_dir / "SPE9.DATA").exists():
-            print("🔍 Parsing SPE9.DATA...")
+            print("Parsing SPE9.DATA...")
             spe9_config = self._parse_spe9_data(self.data_dir / "SPE9.DATA")
             results.update(spe9_config)
             
             if 'dimensions' in spe9_config.get('grid', {}):
                 dims = spe9_config['grid']['dimensions']
-                print(f"   ✅ SPE9 Configuration: {dims[0]}×{dims[1]}×{dims[2]}")
+                print(f"   SPE9 Configuration: {dims[0]}×{dims[1]}×{dims[2]}")
         
         spe9_variants = list(self.data_dir.glob("SPE9_*.DATA"))
         if spe9_variants:
-            print(f"\n📊 Found {len(spe9_variants)} SPE9 variants:")
+            print(f"\nFound {len(spe9_variants)} SPE9 variants:")
             for variant in spe9_variants:
-                print(f"   • {variant.name}")
+                print(f"   {variant.name}")
         
         return results
     
@@ -201,7 +201,7 @@ class PhysicsBasedSimulator:
         self.setup_reservoir()
     
     def setup_reservoir(self):
-        print("\n🔧 Setting up reservoir from REAL data...")
+        print("\nSetting up reservoir from data...")
         
         if 'grid_info' in self.data and 'dimensions' in self.data['grid_info']:
             self.nx, self.ny, self.nz = self.data['grid_info']['dimensions']
@@ -234,11 +234,11 @@ class PhysicsBasedSimulator:
                 {'name': 'INJ1', 'i': 12, 'j': 12, 'type': 'INJECTOR'},
             ]
         
-        print(f"   ✅ Reservoir setup complete:")
-        print(f"      • Grid: {self.nx}×{self.ny}×{self.nz} = {self.total_cells:,} cells")
-        print(f"      • Permeability: {np.mean(self.permeability):.1f} ± {np.std(self.permeability):.1f} md")
-        print(f"      • Porosity: {np.mean(self.porosity):.3f} ± {np.std(self.porosity):.3f}")
-        print(f"      • Wells: {len(self.wells)} wells")
+        print(f"   Reservoir setup complete:")
+        print(f"      Grid: {self.nx}×{self.ny}×{self.nz} = {self.total_cells:,} cells")
+        print(f"      Permeability: {np.mean(self.permeability):.1f} ± {np.std(self.permeability):.1f} md")
+        print(f"      Porosity: {np.mean(self.porosity):.3f} ± {np.std(self.porosity):.3f}")
+        print(f"      Wells: {len(self.wells)} wells")
         
         return {
             'permeability_3d': self.permeability_3d,
@@ -248,7 +248,7 @@ class PhysicsBasedSimulator:
         }
     
     def calculate_well_productivity(self):
-        print("\n⚡ Calculating well productivity from REAL data...")
+        print("\nCalculating well productivity...")
         
         well_rates = []
         for well in self.wells:
@@ -279,7 +279,7 @@ class PhysicsBasedSimulator:
         return well_rates
     
     def run_simulation(self, years=10):
-        print(f"\n🔬 Running physics-based simulation for {years} years...")
+        print(f"\nRunning physics-based simulation for {years} years...")
         
         months = years * 12
         time = np.linspace(0, years, months)
@@ -287,15 +287,15 @@ class PhysicsBasedSimulator:
         well_data = self.calculate_well_productivity()
         
         total_initial_rate = sum(w['base_rate'] for w in well_data)
-        print(f"   • Initial production rate: {total_initial_rate:.0f} bpd")
+        print(f"   Initial production rate: {total_initial_rate:.0f} bpd")
         
         cell_volume = 20 * 20 * 10
         pore_volume = np.sum(self.porosity) * cell_volume
         oil_in_place = pore_volume * 0.7 / 5.6146
         recoverable_oil = oil_in_place * 0.35
         
-        print(f"   • Oil in place: {oil_in_place/1e6:.1f} MM bbl")
-        print(f"   • Recoverable oil: {recoverable_oil/1e6:.1f} MM bbl")
+        print(f"   Oil in place: {oil_in_place/1e6:.1f} MM bbl")
+        print(f"   Recoverable oil: {recoverable_oil/1e6:.1f} MM bbl")
         
         avg_perm = np.mean(self.permeability)
         b_factor = 0.5 + (avg_perm / 1000)
@@ -351,7 +351,7 @@ class EnhancedEconomicAnalyzer:
         self.results = simulation_results
         
     def analyze(self, oil_price=82.5, operating_cost=16.5, discount_rate=0.095):
-        print("\n💰 Running detailed economic analysis...")
+        print("\nRunning economic analysis...")
         
         time = self.results['time']
         oil_rate = self.results['oil_rate']
@@ -449,11 +449,10 @@ class MLIntegration:
     
     @staticmethod
     def run_cnn_property_prediction(grid_data_3d, reservoir_properties):
-        print("\n🧠 Running CNN Reservoir Property Prediction...")
+        print("\nRunning CNN property prediction...")
         
         if not ML_AVAILABLE or not TORCH_AVAILABLE:
-            print("   ⚠️  CNN model not available (PyTorch or ML modules missing)")
-            print("   Using synthetic data for demonstration...")
+            print("   CNN model not available (PyTorch or ML modules missing)")
             return None, None
         
         try:
@@ -467,14 +466,14 @@ class MLIntegration:
             
             train_loader, val_loader = predictor.prepare_data(grid_data_3d, properties_dict)
             
-            print("   Training CNN model...")
+            print("   Training model...")
             train_losses, val_losses = predictor.train(train_loader, val_loader, epochs=10)
             
             metrics = predictor.evaluate(grid_data_3d, properties_dict)
             
-            print("\n   📊 CNN Model Performance:")
+            print("\n   CNN Model Performance:")
             for prop_name, prop_metrics in metrics.items():
-                print(f"     {prop_name.upper()}:")
+                print(f"     {prop_name}:")
                 for metric_name, value in prop_metrics.items():
                     print(f"       {metric_name}: {value:.4f}")
             
@@ -485,15 +484,15 @@ class MLIntegration:
             return predictor, metrics
             
         except Exception as e:
-            print(f"   ⚠️  CNN model error: {str(e)}")
+            print(f"   CNN model error: {str(e)}")
             return None, None
     
     @staticmethod
     def run_svr_economic_prediction(reservoir_params, economic_params):
-        print("\n📈 Running SVR Economic Forecasting...")
+        print("\nRunning SVR economic forecasting...")
         
         if not ML_AVAILABLE:
-            print("   ⚠️  SVR model not available (ML modules missing)")
+            print("   SVR model not available (ML modules missing)")
             return None, None
         
         try:
@@ -521,18 +520,18 @@ class MLIntegration:
             
             metrics = predictor.evaluate(X_test, y_test)
             
-            print("\n   📊 SVR Model Performance:")
+            print("\n   SVR Model Performance:")
             for target, target_metrics in metrics.items():
-                print(f"     {target.upper()}:")
+                print(f"     {target}:")
                 for metric_name, value in target_metrics.items():
                     print(f"       {metric_name}: {value:.4f}")
             
             current_features = engineer.create_features(reservoir_params, economic_params)
             predictions = predictor.predict(current_features)
             
-            print("\n   🔮 Economic Predictions for Current Case:")
+            print("\n   Economic predictions for current case:")
             for target, value in predictions.iloc[0].items():
-                print(f"     {target.upper()}: {value:.2f}")
+                print(f"     {target}: {value:.2f}")
             
             results_dir = Path("results")
             results_dir.mkdir(exist_ok=True)
@@ -544,7 +543,7 @@ class MLIntegration:
             return predictor, predictions.iloc[0].to_dict()
             
         except Exception as e:
-            print(f"   ⚠️  SVR model error: {str(e)}")
+            print(f"   SVR model error: {str(e)}")
             return None, None
     
     @staticmethod
@@ -636,7 +635,7 @@ def main():
     )
     
     print("\n" + "="*70)
-    print("🤖 MACHINE LEARNING INTEGRATION")
+    print("MACHINE LEARNING INTEGRATION")
     print("="*70)
     
     ml_integration = MLIntegration()
@@ -672,10 +671,10 @@ def main():
     
     ml_report = ml_integration.generate_ml_report(cnn_metrics, svr_predictions, economics)
     
-    print("\n📊 Generating professional visualizations...")
+    print("\nGenerating visualizations...")
     create_visualizations(simulation_results, economics, real_data, ml_report)
     
-    print("\n💾 Saving comprehensive report...")
+    print("\nSaving comprehensive report...")
     save_comprehensive_report(simulation_results, economics, real_data, ml_report)
     
     print_summary(simulation_results, economics, real_data, ml_report)
@@ -693,7 +692,7 @@ def create_visualizations(sim_results, economics, real_data, ml_report=None):
     ax1.plot(sim_results['time'], sim_results['water_rate'], 'r-', linewidth=2, label='Water Rate')
     ax1.set_xlabel('Time (years)')
     ax1.set_ylabel('Rate (bpd)')
-    ax1.set_title('Production Profile - REAL SPE9 Data')
+    ax1.set_title('Production Profile')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     
@@ -753,7 +752,7 @@ def create_visualizations(sim_results, economics, real_data, ml_report=None):
         CNN PROPERTY PREDICTION:
         """
         for prop_name, metrics in ml_report['cnn_performance'].items():
-            ml_text += f"\n{prop_name.upper()}:\n"
+            ml_text += f"\n{prop_name}:\n"
             for metric, value in metrics.items():
                 ml_text += f"  {metric}: {value:.4f}\n"
         
@@ -784,20 +783,20 @@ def create_visualizations(sim_results, economics, real_data, ml_report=None):
                     verticalalignment='top',
                     bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.3))
     
-    plt.suptitle('PhD Reservoir Simulation with ML - REAL SPE9 Data', 
+    plt.suptitle('Reservoir Simulation Analysis - SPE9 Data', 
                  fontsize=16, fontweight='bold')
     plt.tight_layout()
-    plt.savefig(results_dir / 'real_spe9_ml_analysis.png', dpi=150, bbox_inches='tight')
+    plt.savefig(results_dir / 'spe9_analysis.png', dpi=150, bbox_inches='tight')
     plt.close()
     
-    print("✅ Visualizations saved: results/real_spe9_ml_analysis.png")
+    print("Visualizations saved: results/spe9_analysis.png")
 
 def save_comprehensive_report(sim_results, economics, real_data, ml_report=None):
     report = {
         'metadata': {
             'timestamp': datetime.now().isoformat(),
-            'project': 'PhD Reservoir Simulation with ML and REAL SPE9 Data',
-            'data_source': 'REAL SPE9 Benchmark Dataset',
+            'project': 'Reservoir Simulation Analysis',
+            'data_source': 'SPE9 Dataset',
             'files_used': real_data['files_found'],
             'ml_integration': ml_report is not None
         },
@@ -827,94 +826,77 @@ def save_comprehensive_report(sim_results, economics, real_data, ml_report=None)
     }
     
     results_dir = Path("results")
-    report_file = results_dir / 'phd_real_spe9_ml_report.json'
+    report_file = results_dir / 'spe9_report.json'
     
     with open(report_file, 'w', encoding='utf-8') as f:
         json.dump(report, f, indent=2)
     
-    print(f"✅ Comprehensive report saved: {report_file}")
+    print(f"Comprehensive report saved: {report_file}")
 
 def print_summary(sim_results, economics, real_data, ml_report=None):
     print("\n" + "=" * 70)
-    print("🎉 PhD-LEVEL RESERVOIR ANALYSIS WITH ML COMPLETED!")
+    print("ANALYSIS COMPLETED")
     print("=" * 70)
     
     summary = f"""
-    📊 TECHNICAL ANALYSIS:
+    TECHNICAL ANALYSIS:
     {'='*40}
-    • Data Source: REAL SPE9 Benchmark Dataset
-    • Grid: 24x25x15 = 9,000 cells
-    • Simulation: 10 years physics-based simulation
-    • Peak Production: {np.max(sim_results['oil_rate']):.0f} bpd
-    • Total Oil Recovered: {np.sum(sim_results['oil_rate']) * 30.4 / 1e6:.2f} MM bbl
-    • Avg Water Cut: {np.mean(sim_results['water_cut']) * 100:.1f}%
-    • Wells Analyzed: {len(sim_results['well_data'])} wells
+    Data Source: SPE9 Dataset
+    Grid: 24x25x15 = 9,000 cells
+    Simulation: 10 years physics-based simulation
+    Peak Production: {np.max(sim_results['oil_rate']):.0f} bpd
+    Total Oil Recovered: {np.sum(sim_results['oil_rate']) * 30.4 / 1e6:.2f} MM bbl
+    Avg Water Cut: {np.mean(sim_results['water_cut']) * 100:.1f}%
+    Wells Analyzed: {len(sim_results['well_data'])} wells
     
-    💰 ECONOMIC RESULTS:
+    ECONOMIC RESULTS:
     {'='*40}
-    • Net Present Value: ${economics['npv']/1e6:.2f} Million
-    • Internal Rate of Return: {economics['irr']*100:.1f}%
-    • Return on Investment: {economics['roi']:.1f}%
-    • Payback Period: {economics['payback_years']:.1f} years
-    • Break-even Price: ${economics['break_even_price']:.1f}/bbl
-    • Capital Investment: ${economics['total_capex']/1e6:.1f} Million
+    Net Present Value: ${economics['npv']/1e6:.2f} Million
+    Internal Rate of Return: {economics['irr']*100:.1f}%
+    Return on Investment: {economics['roi']:.1f}%
+    Payback Period: {economics['payback_years']:.1f} years
+    Break-even Price: ${economics['break_even_price']:.1f}/bbl
+    Capital Investment: ${economics['total_capex']/1e6:.1f} Million
     """
     
     if ml_report and ml_report['cnn_performance']:
         cnn_perf = ml_report['cnn_performance']
         avg_r2 = np.mean([m.get('R2', 0) for m in cnn_perf.values()]) if cnn_perf else 0
         summary += f"""
-    🤖 MACHINE LEARNING RESULTS:
+    MACHINE LEARNING RESULTS:
     {'='*40}
-    • CNN Property Prediction: {'✓ Implemented' if cnn_perf else '✗ Not available'}
-    • SVR Economic Forecasting: {'✓ Implemented' if ml_report['svr_predictions'] else '✗ Not available'}
-    • Model Accuracy (Avg R²): {avg_r2:.3f}
+    CNN Property Prediction: {'Implemented' if cnn_perf else 'Not available'}
+    SVR Economic Forecasting: {'Implemented' if ml_report['svr_predictions'] else 'Not available'}
+    Model Accuracy (Avg R²): {avg_r2:.3f}
     """
     
     summary += f"""
-    📁 DATA VALIDATION:
+    DATA VALIDATION:
     {'='*40}
-    • REAL Data Files: {len(real_data['files_found'])} files loaded
-    • SPE9 Variants: {len([f for f in real_data['files_found'] if 'SPE9_' in f])} configurations
-    • Grid Data: {'✓ Available' if 'grid_info' in real_data else '✗ Not found'}
-    • Permeability Data: {'✓ Available' if 'permeability' in real_data.get('properties', {}) else '✗ Synthetic'}
+    Data Files: {len(real_data['files_found'])} files loaded
+    SPE9 Variants: {len([f for f in real_data['files_found'] if 'SPE9_' in f])} configurations
+    Grid Data: {'Available' if 'grid_info' in real_data else 'Not found'}
+    Permeability Data: {'Available' if 'permeability' in real_data.get('properties', {}) else 'Synthetic'}
     
-    🎯 ACADEMIC CONTRIBUTION:
+    OUTPUT FILES:
     {'='*40}
-    • PhD-Level Analysis with REAL SPE9 Benchmark
-    • Physics-Based Reservoir Simulation
-    • Machine Learning Integration (CNN + SVR)
-    • Professional Economic Valuation
-    • Industry-Standard Reporting
-    • Ready for Journal Publication
+    1. results/spe9_analysis.png - Visualizations
+    2. results/spe9_report.json - JSON report
+    """
     
-    📄 OUTPUT FILES:
-    {'='*40}
-    1. results/real_spe9_ml_analysis.png - Professional visualizations
-    2. results/phd_real_spe9_ml_report.json - Comprehensive JSON report
-    3. results/cnn_reservoir_model.pth - Trained CNN model (if available)
-    4. results/svr_economic_model.joblib - Trained SVR model (if available)
-    
-    🚀 NEXT STEPS:
-    {'='*40}
-    1. Implement Uncertainty Quantification (Monte Carlo)
-    2. Add Deep Reinforcement Learning for well placement
-    3. Compare with commercial simulators (Eclipse/CMG)
-    4. Publish in SPE Journal
-    5. Deploy as web application (Streamlit/Dash)
+    if ml_report and ml_report.get('model_details', {}).get('svr_available'):
+        summary += """    3. results/svr_economic_model.joblib - SVR model
     """
     
     print(summary)
-    
-    print("\n✅ Project is now PhD-Level with REAL Data and ML!")
-    print("📧 Ready for CV, job applications, and academic submissions!")
+    print("\nAnalysis completed successfully!")
     print("=" * 70)
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        print(f"\n❌ Error: {str(e)}")
+        print(f"\nError: {str(e)}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
