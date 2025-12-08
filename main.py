@@ -68,28 +68,54 @@ class AdvancedReservoirSimulationProject:
             print(f"Invalid input: {e}. Using default parameters.")
             return EconomicParameters()
     
-    def load_google_drive_data(self) -> List[Dict]:
-        print("\nLoading SPE9 datasets from Google Drive...")
+    # در main.py
+def load_google_drive_data(self) -> List[Dict]:
+    print("\nLoading SPE9 OPM datasets from Google Drive...")
+    
+    SPE9_DATASETS = {
+        "1iSYvs11OOY1xjjszqD5OmhWWCANDp5rv": "SCHEDULE",
+        "1gu3G98Vzx_P3zWJIWoR-f97uPNnuA-E2": "GRID", 
+        "10lSzBJeKWcDEqHR-jjjhotJbmh9b53K0": "PROPS",
+        "1W8waX7OTlCNpzFbgBy9s8yk2IBpJImZn": "SOLUTION",
+        "1OyWKSscXk9IfwiBZgJztpAC9dKf0nva8": "SCHEDULE",
+        "1F-d-C91qrmMG17Omy9vL1fdfgs3KI-FC": "SUMMARY",
+        "11nfmkE2JHdx1XCfb7mQ5Atqj9GJ3M53o": "RUNSPEC",
+        "1Z23ug_ku0oi0_fwqoRhmJQuVjZeC9OXg": "WELLS",
+        "1R5PMf-9nntZ6nawKknLSHDvH29n4DwSH": "RESULTS"
+    }
+    
+    datasets = []
+    loader = ProfessionalOPMLoader()
+    
+    # فقط فایل SCHEDULE رو برای تحلیل چاه‌ها استفاده کن
+    schedule_id = "1iSYvs11OOY1xjjszqD5OmhWWCANDp5rv"
+    
+    print(f"\nProcessing SPE9 Schedule Data...")
+    success = loader.download_and_parse_opm(schedule_id, "SCHEDULE")
+    
+    if success:
+        reservoir_data = loader.get_reservoir_data()
+        print(f"\n✓ Successfully parsed OPM data")
+        print(f"  Wells: {len(reservoir_data.get('wells', {}))}")
+        print(f"  Grid: {reservoir_data.get('grid', {}).get('dimensions', 'N/A')}")
         
-        dataset_ids = [
-            "13twFcFA35CKbI8neIzIt-D54dzDd1B-N",
-            "1n_auKzsDz5aHglQ4YvskjfHPK8ZuLBqC",
-            "1bdyUFKx-FKPy7YOlq-E9Y4nupcrhOoXi",
-            "1f0aJFS99ZBVkT8IXbKdZdVihbIZIpBwZ",
-            "1sxq7sd4GSL-chE362k8wTLA_arehaD5U",
-            "1ZwEswptUcexDn_kqm_q8qRcHYTl1WHq2"
-        ]
-        
-        datasets = []
-        for dataset_id in dataset_ids:
+        # ایجاد dataset برای هر چاه
+        wells = reservoir_data.get('wells', {})
+        for well_name, well_data in wells.items():
             datasets.append({
-                'id': dataset_id,
-                'name': f'SPE9_Dataset_{dataset_ids.index(dataset_id)+1}',
-                'type': 'google_drive'
+                'id': f"SPE9_{well_name}",
+                'name': f"SPE9 Well {well_name}",
+                'type': 'opm_well',
+                'well_data': well_data,
+                'reservoir_data': reservoir_data
             })
         
-        print(f"Found {len(datasets)} datasets to analyze")
-        return datasets
+        print(f"Created {len(datasets)} well datasets")
+    else:
+        print("✗ Failed to parse OPM data, using synthetic")
+        datasets = self._create_synthetic_datasets()
+    
+    return datasets
     
     def load_sample_data(self) -> List[Dict]:
         print("\nGenerating synthetic reservoir data for testing...")
