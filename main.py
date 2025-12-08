@@ -1,448 +1,291 @@
-import sys
-import os
-import json
+#!/usr/bin/env python3
+"""
+PhD-Level Reservoir Simulation and Economic Analysis Framework
+Author: Reservoir AI Research Team
+License: MIT
+"""
+
+import argparse
 import logging
-import numpy as np
-from typing import Dict, List, Any
+import sys
+from pathlib import Path
 from datetime import datetime
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from src.core.physics_engine import BlackOilSimulator
+from src.data.google_drive_client import SecureDriveClient
+from src.economics.cash_flow import EconomicAnalyzer
+from src.visualization.dashboard import ReservoirDashboard
+from src.utils.logger import setup_logging
+from src.utils.validator import ConfigValidator
 
-from src.economics import ReservoirSimulator, EconomicParameters
-from src.data_loader import DataLoader
-
-try:
-    from src.visualizer import Visualizer
-    HAS_VISUALIZER = True
-except ImportError:
-    HAS_VISUALIZER = False
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-class AdvancedReservoirSimulationProject:
-    def __init__(self):
-        self.data_loader = DataLoader()
-        self.simulation_results = []
-        self.econ_params = None
+class PhDReservoirSimulator:
+    """Main orchestrator for PhD-level reservoir simulation."""
+    
+    def __init__(self, config_path: Path):
+        self.config = self._load_config(config_path)
+        self.logger = setup_logging(self.config['logging'])
+        self.validator = ConfigValidator()
         
-    def configure_economic_parameters(self) -> EconomicParameters:
-        print("\n" + "="*50)
-        print("ECONOMIC PARAMETERS CONFIGURATION")
-        print("="*50)
+    def _load_config(self, config_path: Path) -> dict:
+        """Load and validate configuration."""
+        import yaml
+        
+        if not config_path.exists():
+            raise FileNotFoundError(f"Config file not found: {config_path}")
+        
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        # Validate configuration
+        self.validator.validate_config(config)
+        
+        return config
+    
+    def run_simulation(self, mode: str = "full") -> dict:
+        """Execute complete simulation workflow."""
+        self.logger.info(f"Starting PhD reservoir simulation in {mode} mode")
+        
+        results = {}
         
         try:
-            forecast_years_input = input("Forecast years [15]: ").strip()
-            oil_price_input = input("Oil price (USD/bbl) [82.5]: ").strip()
-            operating_cost_input = input("Operating cost (USD/bbl) [16.5]: ").strip()
-            discount_rate_input = input("Discount rate (%) [9.5]: ").strip()
+            # Phase 1: Data Acquisition
+            if mode in ["full", "data"]:
+                data_results = self._acquire_and_validate_data()
+                results['data'] = data_results
             
-            forecast_years = int(forecast_years_input) if forecast_years_input else 15
-            oil_price = float(oil_price_input) if oil_price_input else 82.5
-            operating_cost = float(operating_cost_input) if operating_cost_input else 16.5
-            discount_rate = (float(discount_rate_input) if discount_rate_input else 9.5) / 100.0
+            # Phase 2: Physics Simulation
+            if mode in ["full", "physics"]:
+                physics_results = self._run_physics_simulation(data_results)
+                results['physics'] = physics_results
             
-            print("\nAdvanced parameters (press Enter for defaults):")
-            capex_input = input("CAPEX per producer ($M) [3.5]: ").strip()
-            opex_input = input("Fixed annual OPEX ($M) [2.5]: ").strip()
+            # Phase 3: Economic Analysis
+            if mode in ["full", "economics"]:
+                economic_results = self._run_economic_analysis(physics_results)
+                results['economics'] = economic_results
             
-            capex_per_producer = (float(capex_input) if capex_input else 3.5) * 1000000.0
-            fixed_annual_opex = (float(opex_input) if opex_input else 2.5) * 1000000.0
+            # Phase 4: Visualization
+            if mode in ["full", "visualization"]:
+                visualization_results = self._generate_visualizations(results)
+                results['visualization'] = visualization_results
             
-            self.econ_params = EconomicParameters(
-                forecast_years=forecast_years,
-                oil_price=oil_price,
-                opex_per_bbl=operating_cost,
-                discount_rate=discount_rate,
-                capex_per_producer=capex_per_producer,
-                fixed_opex=fixed_annual_opex
-            )
-            
-            logger.info(f"Parameters configured: {forecast_years}y forecast, ${oil_price}/bbl, {discount_rate*100:.1f}% DR")
-            return self.econ_params
-            
-        except ValueError as e:
-            print(f"Invalid input: {e}. Using default parameters.")
-            return EconomicParameters()
-    
-    def load_google_drive_data(self) -> List[Dict]:
-        print("\nLoading SPE9 OPM datasets from Google Drive...")
-        
-        dataset_ids = [
-            "1iSYvs11OOY1xjjszqD5OmhWWCANDp5rv",
-            "1gu3G98Vzx_P3zWJIWoR-f97uPNnuA-E2",
-            "10lSzBJeKWcDEqHR-jjjhotJbmh9b53K0",
-            "1W8waX7OTlCNpzFbgBy9s8yk2IBpJImZn",
-            "1OyWKSscXk9IfwiBZgJztpAC9dKf0nva8",
-            "1F-d-C91qrmMG17Omy9vL1fdfgs3KI-FC",
-            "11nfmkE2JHdx1XCfb7mQ5Atqj9GJ3M53o",
-            "1Z23ug_ku0oi0_fwqoRhmJQuVjZeC9OXg",
-            "1R5PMf-9nntZ6nawKknLSHDvH29n4DwSH"
-        ]
-        
-        datasets = []
-        for i, dataset_id in enumerate(dataset_ids):
-            datasets.append({
-                'id': dataset_id,
-                'name': f'SPE9_Dataset_{i+1}',
-                'type': 'google_drive'
-            })
-        
-        print(f"Found {len(datasets)} SPE9 datasets")
-        return datasets
-    
-    def load_sample_data(self) -> List[Dict]:
-        print("\nGenerating synthetic reservoir data for testing...")
-        
-        datasets = []
-        for i in range(3):
-            datasets.append({
-                'id': f'sample_data_{i+1}',
-                'name': f'Synthetic_Reservoir_{i+1}',
-                'type': 'synthetic'
-            })
-        
-        return datasets
-    
-    def load_custom_file(self) -> List[Dict]:
-        file_path = input("\nEnter full path to data file: ").strip()
-        
-        if not os.path.exists(file_path):
-            print(f"File not found: {file_path}")
-            return []
-        
-        return [{
-            'id': os.path.basename(file_path).split('.')[0],
-            'name': os.path.basename(file_path),
-            'path': file_path,
-            'type': 'custom'
-        }]
-    
-    def _create_synthetic_datasets(self) -> List[Dict]:
-        datasets = []
-        for i in range(3):
-            datasets.append({
-                'id': f'synthetic_{i+1}',
-                'name': f'Synthetic_Reservoir_{i+1}',
-                'type': 'synthetic'
-            })
-        return datasets
-    
-    def run_single_simulation(self, dataset: Dict) -> Dict:
-        print("\n" + "="*60)
-        print(f"DATASET: {dataset['id']}")
-        print("="*60)
-        
-        try:
-            if dataset['type'] == 'synthetic':
-                self.data_loader._generate_synthetic_data()
-                reservoir_data = self.data_loader.get_reservoir_data()
-            elif dataset['type'] == 'google_drive':
-                success = self.data_loader.load_google_drive_data(dataset['id'])
-                if not success:
-                    print("  Using synthetic data (download/parse failed)")
-                    self.data_loader._generate_synthetic_data()
-                reservoir_data = self.data_loader.get_reservoir_data()
-            elif dataset['type'] == 'custom':
-                import pandas as pd
-                df = pd.read_csv(dataset['path'], on_bad_lines='skip')
-                time_col = df.columns[0]
-                rate_col = df.columns[1] if len(df.columns) > 1 else df.columns[0]
-                
-                from src.economics import WellProductionData
-                time_data = pd.to_numeric(df[time_col], errors='coerce').dropna().values
-                rate_data = pd.to_numeric(df[rate_col], errors='coerce').dropna().values
-                
-                min_len = min(len(time_data), len(rate_data))
-                time_data = time_data[:min_len]
-                rate_data = rate_data[:min_len]
-                
-                if len(time_data) < 3 or len(rate_data) < 3:
-                    print("  Insufficient data, using synthetic")
-                    self.data_loader._generate_synthetic_data()
-                    reservoir_data = self.data_loader.get_reservoir_data()
-                else:
-                    reservoir_data = {
-                        'wells': {
-                            'CUSTOM_WELL': WellProductionData(
-                                time_points=time_data,
-                                oil_rate=rate_data,
-                                well_type='PRODUCER'
-                            )
-                        },
-                        'grid': {
-                            'dimensions': (24, 25, 15),
-                            'porosity': np.random.uniform(0.15, 0.25, 100)
-                        }
-                    }
-            else:
-                raise ValueError(f"Unknown dataset type: {dataset['type']}")
-            
-            simulator = ReservoirSimulator(reservoir_data, self.econ_params)
-            results = simulator.run_comprehensive_analysis()
-            
-            if 'error' in results:
-                raise ValueError(results['error'])
-            
-            wells_analyzed = len(results.get('decline_analysis', {}))
-            
-            print(f"\n  Wells analyzed: {wells_analyzed}")
-            print(f"  Forecast period: {self.econ_params.forecast_years} years")
-            print(f"\n  ECONOMIC RESULTS:")
-            print(f"    NPV: ${results['economic_evaluation']['npv']/1_000_000:+.2f}M")
-            print(f"    IRR: {results['economic_evaluation']['irr']:.1f}%")
-            print(f"    ROI: {results['economic_evaluation']['roi']:.1f}%")
-            payback = results['economic_evaluation']['payback_period']
-            payback_str = f"{payback:.1f}" if payback < 100 else ">100"
-            print(f"    Payback: {payback_str} years")
-            print(f"    Break-even: ${results['economic_evaluation']['break_even_price']:.1f}/bbl")
-            
-            if HAS_VISUALIZER:
-                try:
-                    visualizer = Visualizer()
-                    dataset_id_short = dataset['id'][:20]
-                    visualizer.create_dashboard(results, dataset_id_short)
-                    visualizer.plot_production_forecast(results, dataset_id_short)
-                    visualizer.plot_economic_results(results, dataset_id_short)
-                    print(f"  Visualizations generated for {dataset_id_short}")
-                except Exception as viz_error:
-                    print(f"  Visualization error: {viz_error}")
-            else:
-                print("  Skipping visualizations (Visualizer module not available)")
-            
-            return {
-                'dataset_id': dataset['id'],
-                'dataset_name': dataset['name'],
-                'results': results,
-                'success': True
-            }
+            self.logger.info("Simulation completed successfully")
             
         except Exception as e:
-            logger.error(f"Simulation failed for {dataset['id']}: {e}")
-            print(f"  ERROR: {e}")
+            self.logger.error(f"Simulation failed: {str(e)}", exc_info=True)
+            raise
+        
+        return results
+    
+    def _acquire_and_validate_data(self) -> dict:
+        """Acquire data from Google Drive and validate."""
+        self.logger.info("Acquiring data from Google Drive")
+        
+        # Initialize Google Drive client
+        drive_client = SecureDriveClient(
+            credentials_path=Path(self.config['google_drive']['credentials']),
+            cache_dir=Path(self.config['paths']['cache'])
+        )
+        
+        # Load SPE9 datasets
+        spe_loader = SPEDatasetLoader(drive_client)
+        datasets = spe_loader.load_spe9_benchmark()
+        
+        # Validate datasets
+        validation_results = {}
+        for name, dataset in datasets.items():
+            validator = DataValidator(dataset)
+            is_valid = validator.validate()
             
-            return {
-                'dataset_id': dataset['id'],
-                'dataset_name': dataset['name'],
-                'error': str(e),
-                'success': False
+            validation_results[name] = {
+                'dataset': dataset,
+                'is_valid': is_valid,
+                'validation_report': validator.get_report()
             }
+        
+        return validation_results
     
-    def generate_comparison_table(self, simulation_results: List[Dict]):
-        print("\n" + "="*80)
-        print("DATASET COMPARISON")
-        print("="*80)
+    def _run_physics_simulation(self, data_results: dict) -> dict:
+        """Run physics-based reservoir simulation."""
+        self.logger.info("Running physics simulation")
         
-        table_data = []
-        for result in simulation_results:
-            if result['success']:
-                results = result['results']
-                econ = results['economic_evaluation']
-                wells = len(results.get('decline_analysis', {}))
-                eur = results['production_forecast'].get('total_eur', 0) / 1_000_000
-                payback = econ['payback_period']
-                payback_str = f"{payback:.1f}" if payback < 100 else ">100"
-                
-                table_data.append({
-                    'dataset': result['dataset_id'][:20],
-                    'wells': wells,
-                    'npv': econ['npv'] / 1_000_000,
-                    'irr': econ['irr'],
-                    'roi': econ['roi'],
-                    'payback': payback_str,
-                    'eur': eur,
-                    'capex': econ['capex'] / 1_000_000
-                })
-            else:
-                table_data.append({
-                    'dataset': result['dataset_id'][:20],
-                    'wells': 0,
-                    'npv': 0.0,
-                    'irr': 0.0,
-                    'roi': 0.0,
-                    'payback': ">100",
-                    'eur': 0.0,
-                    'capex': 0.0
-                })
+        simulation_results = {}
         
-        print("+----------------------+-------+----------+---------+---------+-------------+-------------+------------+")
-        print("| Dataset              | Wells | NPV ($M) | IRR (%) | ROI (%) | Payback (y) | EUR (MMbbl) | CAPEX ($M) |")
-        print("+----------------------+-------+----------+---------+---------+-------------+-------------+------------+")
-        
-        for row in table_data:
-            dataset = row['dataset'].ljust(20)
-            wells = str(row['wells']).rjust(5)
-            npv = f"{row['npv']:+.2f}".rjust(8)
-            irr = f"{row['irr']:.1f}".rjust(7)
-            roi = f"{row['roi']:.1f}".rjust(7)
-            payback = str(row['payback']).rjust(11)
-            eur = f"{row['eur']:.1f}".rjust(11)
-            capex = f"{row['capex']:.1f}".rjust(10)
+        for dataset_name, data_info in data_results.items():
+            if not data_info['is_valid']:
+                self.logger.warning(f"Skipping invalid dataset: {dataset_name}")
+                continue
             
-            print(f"| {dataset} | {wells} | {npv} | {irr} | {roi} | {payback} | {eur} | {capex} |")
-        
-        print("+----------------------+-------+----------+---------+---------+-------------+-------------+------------+")
-        
-        return table_data
-    
-    def generate_project_summary(self, simulation_results: List[Dict]):
-        successful = [r for r in simulation_results if r['success']]
-        if not successful:
-            print("\nNo successful simulations to summarize.")
-            return
-        
-        profitable = [r for r in successful if r['results']['economic_evaluation']['npv'] > 0]
-        
-        avg_npv = np.mean([r['results']['economic_evaluation']['npv'] for r in successful]) / 1_000_000
-        avg_irr = np.mean([r['results']['economic_evaluation']['irr'] for r in successful])
-        avg_roi = np.mean([r['results']['economic_evaluation']['roi'] for r in successful])
-        
-        best_project = max(successful, key=lambda x: x['results']['economic_evaluation']['npv'])
-        worst_project = min(successful, key=lambda x: x['results']['economic_evaluation']['npv'])
-        
-        print("\n" + "="*80)
-        print("PROJECT SUMMARY")
-        print("="*80)
-        print(f"  Total simulations: {len(simulation_results)}")
-        print(f"  Successful: {len(successful)}")
-        profitable_pct = (len(profitable)/len(successful)*100) if successful else 0
-        print(f"  Profitable projects: {len(profitable)} ({profitable_pct:.0f}%)")
-        print(f"  Average NPV: ${avg_npv:+.2f}M")
-        print(f"  Average IRR: {avg_irr:.1f}%")
-        print(f"  Average ROI: {avg_roi:.1f}%")
-        
-        if best_project:
-            print(f"\n  BEST PROJECT: {best_project['dataset_id'][:20]}")
-            print(f"    NPV: ${best_project['results']['economic_evaluation']['npv']/1_000_000:+.2f}M")
-            print(f"    IRR: {best_project['results']['economic_evaluation']['irr']:.1f}%")
-        
-        if worst_project and worst_project != best_project:
-            print(f"\n  WORST PROJECT: {worst_project['dataset_id'][:20]}")
-            print(f"    NPV: ${worst_project['results']['economic_evaluation']['npv']/1_000_000:+.2f}M")
-            print(f"    IRR: {worst_project['results']['economic_evaluation']['irr']:.1f}%")
-    
-    def save_comprehensive_report(self, simulation_results: List[Dict]):
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_filename = f"simulation_report_{timestamp}.json"
-        
-        report_data = {
-            'timestamp': timestamp,
-            'economic_parameters': {
-                'forecast_years': self.econ_params.forecast_years,
-                'oil_price': self.econ_params.oil_price,
-                'discount_rate': self.econ_params.discount_rate,
-                'opex_per_bbl': self.econ_params.opex_per_bbl,
-                'capex_per_producer': self.econ_params.capex_per_producer / 1_000_000,
-                'fixed_opex': self.econ_params.fixed_opex / 1_000_000
-            },
-            'simulations': []
-        }
-        
-        for result in simulation_results:
-            sim_data = {
-                'dataset_id': result['dataset_id'],
-                'dataset_name': result['dataset_name'],
-                'success': result['success'],
-                'type': result.get('type', 'unknown')
+            dataset = data_info['dataset']
+            
+            # Initialize simulator
+            simulator = BlackOilSimulator(
+                grid=dataset['grid'],
+                properties=dataset['properties'],
+                pvt_data=dataset['pvt'],
+                config=self.config['simulation']
+            )
+            
+            # Run simulation
+            simulation_result = simulator.run(
+                time_steps=self.config['simulation']['time_steps'],
+                output_frequency=self.config['simulation']['output_freq']
+            )
+            
+            simulation_results[dataset_name] = {
+                'simulator': simulator,
+                'results': simulation_result,
+                'performance': simulator.get_performance_metrics()
             }
-            
-            if result['success']:
-                results = result['results']
-                sim_data.update({
-                    'wells_analyzed': len(results.get('decline_analysis', {})),
-                    'npv': float(results['economic_evaluation']['npv']),
-                    'irr': float(results['economic_evaluation']['irr']),
-                    'roi': float(results['economic_evaluation']['roi']),
-                    'payback_period': float(results['economic_evaluation']['payback_period']),
-                    'break_even_price': float(results['economic_evaluation']['break_even_price']),
-                    'eur': float(results['production_forecast'].get('total_eur', 0)),
-                    'recovery_factor': float(results['reservoir_properties'].get('recovery_factor', 0))
-                })
-            else:
-                sim_data['error'] = result.get('error', 'Unknown error')
-            
-            report_data['simulations'].append(sim_data)
         
-        with open(report_filename, 'w') as f:
-            json.dump(report_data, f, indent=2, default=str)
-        
-        print(f"\n✓ Comprehensive report saved to: {report_filename}")
-        return report_filename
+        return simulation_results
     
-    def run(self):
-        print("="*80)
-        print("ADVANCED RESERVOIR SIMULATION PROJECT - PhD LEVEL")
-        print("="*80)
-        print("\nComprehensive reservoir characterization, decline analysis,")
-        print("production forecasting, and economic evaluation system")
-        print("="*80)
+    def _run_economic_analysis(self, physics_results: dict) -> dict:
+        """Run comprehensive economic analysis."""
+        self.logger.info("Running economic analysis")
         
-        print("\n" + "="*50)
-        print("DATA SOURCE SELECTION")
-        print("="*50)
-        print("1. Google Drive - SPE9 Benchmark Datasets (6 datasets)")
-        print("2. Sample Data - Synthetic reservoir for testing")
-        print("3. Custom File - Load from local file")
+        economic_results = {}
         
-        while True:
-            try:
-                option = input("\nSelect option (1-3): ").strip()
-                if option in ['1', '2', '3']:
-                    break
-                print("Invalid option. Please enter 1, 2, or 3.")
-            except KeyboardInterrupt:
-                print("\n\nSimulation cancelled.")
-                return
+        # Initialize economic analyzer
+        economic_config = self.config['economics']
+        analyzer = EconomicAnalyzer(
+            discount_rate=economic_config['discount_rate'],
+            oil_price=economic_config['oil_price'],
+            operating_cost=economic_config['operating_cost']
+        )
         
-        if option == '1':
-            datasets = self.load_google_drive_data()
-        elif option == '2':
-            datasets = self.load_sample_data()
-        else:
-            datasets = self.load_custom_file()
+        for dataset_name, physics_info in physics_results.items():
+            production_profile = physics_info['results']['production']
+            reservoir_properties = physics_info['simulator'].reservoir_properties
+            
+            # Calculate economic metrics
+            economic_metrics = analyzer.analyze(
+                production_profile=production_profile,
+                capex=self.config['economics']['capex'],
+                opex=self.config['economics']['opex'],
+                tax_rate=self.config['economics']['tax_rate']
+            )
+            
+            # Add risk analysis
+            risk_analysis = analyzer.risk_assessment(
+                economic_metrics,
+                price_uncertainty=self.config['economics']['price_uncertainty'],
+                cost_uncertainty=self.config['economics']['cost_uncertainty']
+            )
+            
+            economic_results[dataset_name] = {
+                'metrics': economic_metrics,
+                'risk': risk_analysis,
+                'sensitivity': analyzer.sensitivity_analysis(
+                    economic_metrics,
+                    parameters=self.config['economics']['sensitivity_params']
+                )
+            }
         
-        if not datasets:
-            print("No datasets available. Exiting.")
-            return
+        return economic_results
+    
+    def _generate_visualizations(self, all_results: dict) -> dict:
+        """Generate comprehensive visualizations."""
+        self.logger.info("Generating visualizations")
         
-        self.econ_params = self.configure_economic_parameters()
+        output_dir = Path(self.config['paths']['output'])
+        output_dir.mkdir(parents=True, exist_ok=True)
         
-        print("\n" + "="*80)
-        print(f"RUNNING SIMULATIONS - {len(datasets)} DATASETS")
-        print("="*80)
+        dashboard = ReservoirDashboard(output_dir)
         
-        self.simulation_results = []
-        for dataset in datasets:
-            result = self.run_single_simulation(dataset)
-            self.simulation_results.append(result)
+        visualization_results = {}
         
-        self.generate_comparison_table(self.simulation_results)
+        # Generate dashboard for each dataset
+        for dataset_name, results in all_results.get('physics', {}).items():
+            viz_result = dashboard.create_dataset_dashboard(
+                dataset_name=dataset_name,
+                physics_results=results['results'],
+                economic_results=all_results['economics'].get(dataset_name, {}),
+                config=self.config['visualization']
+            )
+            
+            visualization_results[dataset_name] = viz_result
         
-        report_file = self.save_comprehensive_report(self.simulation_results)
+        # Generate comparative dashboard
+        comparative_dashboard = dashboard.create_comparative_dashboard(
+            all_results=all_results
+        )
         
-        self.generate_project_summary(self.simulation_results)
+        visualization_results['comparative'] = comparative_dashboard
         
-        print("\n" + "="*80)
-        print("SIMULATION COMPLETED")
-        print("="*80)
-        print(f"\nResults:")
-        print(f"  - Report: {report_file}")
-        print(f"  - Visualizations: visualizations/ folder")
-        print(f"  - Processed datasets: {len([r for r in self.simulation_results if r['success']])}/{len(self.simulation_results)}")
+        return visualization_results
 
 def main():
+    """Main entry point."""
+    parser = argparse.ArgumentParser(
+        description="PhD-Level Reservoir Simulation Framework",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    parser.add_argument(
+        '--config',
+        type=Path,
+        default=Path('config/settings.yaml'),
+        help='Path to configuration file'
+    )
+    
+    parser.add_argument(
+        '--mode',
+        type=str,
+        choices=['full', 'data', 'physics', 'economics', 'visualization'],
+        default='full',
+        help='Execution mode'
+    )
+    
+    parser.add_argument(
+        '--output-dir',
+        type=Path,
+        default=Path(f'results/simulation_{datetime.now():%Y%m%d_%H%M%S}'),
+        help='Output directory'
+    )
+    
+    parser.add_argument(
+        '--log-level',
+        type=str,
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+        default='INFO',
+        help='Logging level'
+    )
+    
+    args = parser.parse_args()
+    
     try:
-        project = AdvancedReservoirSimulationProject()
-        project.run()
-    except KeyboardInterrupt:
-        print("\n\nSimulation interrupted by user.")
+        # Create output directory
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Update config with command-line arguments
+        config_path = args.config
+        
+        simulator = PhDReservoirSimulator(config_path)
+        results = simulator.run_simulation(mode=args.mode)
+        
+        # Save results
+        import json
+        results_file = args.output_dir / 'simulation_results.json'
+        with open(results_file, 'w') as f:
+            json.dump(results, f, indent=2, default=str)
+        
+        print(f"\n✅ Simulation completed successfully!")
+        print(f"📁 Results saved to: {args.output_dir}")
+        
+        # Print summary
+        if 'economics' in results:
+            print("\n📊 Economic Summary:")
+            print("-" * 50)
+            for dataset, econ_data in results['economics'].items():
+                npv = econ_data['metrics'].get('npv', 0)
+                irr = econ_data['metrics'].get('irr', 0)
+                print(f"{dataset:30} NPV: ${npv/1e6:8.2f}M  IRR: {irr:6.2f}%")
+        
+        return 0
+        
     except Exception as e:
-        print(f"\nFatal error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"\n❌ Simulation failed: {str(e)}", file=sys.stderr)
+        return 1
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
