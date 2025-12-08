@@ -1,147 +1,158 @@
 #!/usr/bin/env python3
 """
-PhD Reservoir Simulator with REAL SPE9 Data Integration
+PhD Reservoir Simulator with ML Integration
+CNN-LSTM-SVR for advanced analysis
 """
 
 import sys
 from pathlib import Path
 
-# Add src to path
+# Add ML modules
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from src.data.real_parser import RealSPE9Parser
 from src.core.physics_engine import BlackOilSimulator
 from src.economics.cash_flow import EconomicAnalyzer
-from src.visualization.dashboard import ReservoirDashboard
+
+# Import ML modules
+from src.ml.cnn_3d_reservoir import Reservoir3DCNN
+from src.ml.lstm_production import ProductionForecaster
+from src.ml.svr_economics import EconomicSVR
+from src.ml.hybrid_cnn_lstm import HybridCNNLSTM
+
+def run_ml_analysis(real_data: dict, simulation_results: dict):
+    """Run comprehensive ML analysis."""
+    
+    print("\n🤖 Running Machine Learning Analysis...")
+    
+    # 1. CNN for spatial analysis
+    print("🧠 1. CNN - Spatial Reservoir Analysis")
+    cnn_model = Reservoir3DCNN(use_gpu=True)
+    
+    # Prepare 3D data for CNN
+    porosity_3d = real_data['porosity'].reshape(24, 25, 15)
+    perm_3d = real_data['permeability']['x'].reshape(24, 25, 15)
+    
+    # Train/predict with CNN
+    cnn_predictions = cnn_model.predict_pressure_field(
+        porosity=porosity_3d,
+        permeability=perm_3d,
+        saturation=simulation_results['saturation_oil'][-1].reshape(24, 25, 15),
+        well_locations=np.array([well['i', 'j', 'k'] for well in real_data['wells']])
+    )
+    
+    # 2. LSTM for temporal forecasting
+    print("📈 2. LSTM - Production Forecasting")
+    lstm_forecaster = ProductionForecaster()
+    
+    # Convert simulation results to time series
+    production_series = pd.DataFrame({
+        'oil_rate': simulation_results['production']['oil'],
+        'water_rate': simulation_results['production']['water'],
+        'pressure': [np.mean(p) for p in simulation_results['pressure']],
+        'time': simulation_results['time']
+    })
+    
+    # Forecast future production
+    forecast_results = lstm_forecaster.forecast_with_confidence(
+        production_series.values[-30:],  # Last 30 days
+        n_samples=1000
+    )
+    
+    # 3. SVR for economic analysis
+    print("💰 3. SVR - Economic Sensitivity Analysis")
+    svr_model = EconomicSVR(kernel='rbf', use_grid_search=True)
+    
+    # Prepare economic data
+    economic_features = svr_model.prepare_economic_data(
+        reservoir_data=real_data,
+        economic_data=pd.DataFrame(simulation_results['economic_metrics'])
+    )
+    
+    # Train SVR model
+    svr_results = svr_model.train_multi_target(*economic_features)
+    
+    # Perform sensitivity analysis
+    sensitivity_results = svr_model.sensitivity_analysis(
+        base_params={
+            'oil_price': 82.5,
+            'operating_cost': 16.5,
+            'discount_rate': 0.095
+        },
+        parameter_ranges={
+            'oil_price': (50, 120),
+            'operating_cost': (10, 25),
+            'discount_rate': (0.05, 0.15)
+        }
+    )
+    
+    # 4. Hybrid CNN-LSTM for integrated analysis
+    print("🔗 4. Hybrid CNN-LSTM - Integrated Analysis")
+    hybrid_model = HybridCNNLSTM()
+    
+    # Prepare spatio-temporal data
+    spatial_data = np.stack([
+        porosity_3d,
+        perm_3d,
+        simulation_results['saturation_oil'][-1].reshape(24, 25, 15),
+        simulation_results['pressure'][-1].reshape(24, 25, 15)
+    ], axis=0)  # (4, 24, 25, 15)
+    
+    temporal_data = production_series[['oil_rate', 'water_rate', 'pressure']].values
+    
+    # Make hybrid predictions
+    hybrid_predictions = hybrid_model.forecast_production(
+        spatial_sequence=spatial_data,
+        temporal_sequence=temporal_data[-30:],  # Last 30 time steps
+        forecast_steps=90  # Forecast 90 days
+    )
+    
+    return {
+        'cnn': {
+            'pressure_predictions': cnn_predictions,
+            'sweet_spots': cnn_model.predict_sweet_spots(spatial_data),
+            'uncertainty_map': cnn_model.generate_uncertainty_map(spatial_data)
+        },
+        'lstm': {
+            'production_forecast': forecast_results,
+            'anomalies': lstm_forecaster.detect_anomalies(production_series.values)
+        },
+        'svr': {
+            'economic_predictions': svr_results,
+            'sensitivity_analysis': sensitivity_results,
+            'break_even': svr_model.calculate_break_even({
+                'porosity': np.mean(porosity_3d),
+                'permeability': np.mean(perm_3d),
+                'initial_rate': production_series['oil_rate'].iloc[0]
+            })
+        },
+        'hybrid': {
+            'predictions': hybrid_predictions,
+            'spatio_temporal_analysis': 'completed'
+        }
+    }
 
 def main():
-    print("=" * 70)
-    print("🎯 PhD RESERVOIR SIMULATOR - REAL SPE9 ANALYSIS")
-    print("=" * 70)
+    """Main function with ML integration."""
     
-    # 1. Load REAL SPE9 data
-    print("\n📥 Loading REAL SPE9 dataset...")
-    parser = RealSPE9Parser(Path("data"))
-    real_data = parser.get_simulation_ready_data()
+    # ... (existing code for loading data and physics simulation)
     
-    # Show validation results
-    validation = real_data['validation']
-    print(f"✅ Grid: {real_data['grid_dimensions']} = {real_data['grid_dimensions'][0]*real_data['grid_dimensions'][1]*real_data['grid_dimensions'][2]:,} cells")
-    print(f"✅ Wells: {validation['well_count']} wells")
+    # Run physics simulation
+    physics_results = simulator.run(total_time=3650)
     
-    if 'porosity_stats' in validation:
-        stats = validation['porosity_stats']
-        print(f"✅ Porosity: {stats['mean']:.3f} (min: {stats['min']:.3f}, max: {stats['max']:.3f})")
+    # Run ML analysis
+    ml_results = run_ml_analysis(real_data, physics_results)
     
-    # 2. Run REAL simulation
-    print("\n⚡ Running REAL reservoir simulation...")
-    
-    # Create simulator with REAL data
-    simulator = BlackOilSimulator(
-        grid_dimensions=real_data['grid_dimensions'],
-        porosity=real_data['porosity'],
-        permeability=real_data['permeability'],
-        initial_conditions=real_data['initial_conditions'],
-        pvt_tables=real_data['pvt_tables']
-    )
-    
-    # Add REAL wells
-    for well in real_data['wells']:
-        simulator.add_well(
-            name=well['name'],
-            location=(well['i'], well['j'], well['completions'][0]['k_top']),
-            well_type=well['type'],
-            control=well.get('control_value', 1000)
-        )
-    
-    # Run simulation
-    results = simulator.run(total_time=3650)  # 10 years
-    
-    print(f"✅ Simulation completed: {len(results['time'])} time steps")
-    
-    # 3. Economic Analysis with REAL data
-    print("\n💰 Running REAL economic analysis...")
-    
-    analyzer = EconomicAnalyzer(
-        discount_rate=0.095,
-        oil_price=82.5,
-        operating_cost=16.5
-    )
-    
-    # Calculate production profile from simulation results
-    production_profile = results['production']
-    
-    economic_results = analyzer.analyze(
-        production_profile=production_profile,
-        capex=len(real_data['wells']) * 3.5e6,  # $3.5M per well
-        opex=2.5e6  # $2.5M annual OPEX
-    )
-    
-    print(f"✅ NPV: ${economic_results['npv']/1e6:.2f}M")
-    print(f"✅ IRR: {economic_results['irr']*100:.2f}%")
-    
-    # 4. Generate REAL visualizations
-    print("\n📊 Generating REAL visualizations...")
-    
-    dashboard = ReservoirDashboard(Path("results"))
-    dashboard_path = dashboard.create_dataset_dashboard(
-        dataset_name="SPE9_REAL_ANALYSIS",
-        physics_results=results,
-        economic_results=economic_results
-    )
-    
-    print(f"✅ Dashboard saved: {dashboard_path}")
-    
-    # 5. Generate comprehensive report
-    print("\n📄 Generating comprehensive report...")
-    
+    # Generate comprehensive report
     report = {
-        'simulation': {
-            'grid_dimensions': real_data['grid_dimensions'],
-            'total_cells': real_data['grid_dimensions'][0] * real_data['grid_dimensions'][1] * real_data['grid_dimensions'][2],
-            'well_count': len(real_data['wells']),
-            'simulation_time': results['time'][-1],
-            'time_steps': len(results['time'])
-        },
-        'physics': {
-            'final_pressure': float(np.mean(results['pressure'][-1])),
-            'final_oil_saturation': float(np.mean(results['saturation_oil'][-1])),
-            'final_water_saturation': float(np.mean(results['saturation_water'][-1])),
-            'total_oil_produced': float(np.sum(results['production']['oil']))
-        },
+        'physics': physics_results,
         'economics': economic_results,
+        'ml_analysis': ml_results,
         'validation': validation
     }
     
-    # Save report
-    import json
-    with open("results/spe9_real_report.json", 'w') as f:
-        json.dump(report, f, indent=2)
-    
-    print("\n" + "=" * 70)
-    print("🎉 REAL SPE9 ANALYSIS COMPLETED SUCCESSFULLY!")
-    print("=" * 70)
-    
-    # Print summary
-    print(f"\n📊 SUMMARY:")
-    print(f"  • Grid: {report['simulation']['grid_dimensions']}")
-    print(f"  • Cells: {report['simulation']['total_cells']:,}")
-    print(f"  • Wells: {report['simulation']['well_count']}")
-    print(f"  • Simulation: {report['simulation']['simulation_time']:.0f} days")
-    print(f"  • Oil Produced: {report['physics']['total_oil_produced']/1000:.1f} Mbbl")
-    print(f"  • NPV: ${report['economics']['npv']/1e6:.2f}M")
-    print(f"  • IRR: {report['economics']['irr']*100:.2f}%")
-    
-    if not validation['is_valid']:
-        print(f"\n⚠️  Validation issues: {validation['errors']}")
-    
-    return 0
-
-if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except Exception as e:
-        print(f"\n❌ Error: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+    print("\n✅ ML Analysis Completed:")
+    print(f"   • CNN identified {np.sum(ml_results['cnn']['sweet_spots'])} sweet spots")
+    print(f"   • LSTM forecast: {ml_results['lstm']['production_forecast']['mean'][-1]:.1f} bpd in 90 days")
+    print(f"   • SVR break-even price: ${ml_results['svr']['break_even']['break_even_price']:.2f}/bbl")
+    print(f"   • Hybrid model confidence: ±{ml_results['hybrid']['predictions']['std']:.1%}")
