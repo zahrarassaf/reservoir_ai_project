@@ -321,6 +321,4 @@ Research community in reservoir engineering and machine learning
 
 
 
-GitHub Issues: Create an issue
 
-Email: your.email@example.com
