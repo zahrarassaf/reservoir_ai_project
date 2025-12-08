@@ -201,8 +201,8 @@ class ReservoirSimulator:
             if isinstance(porosity_data, np.ndarray) and len(porosity_data) > 0:
                 avg_porosity = np.mean(porosity_data)
         
-        avg_thickness = 50.0
-        area_acres = 640.0
+        avg_thickness = 100.0  # Increased for SPE9
+        area_acres = 3200.0    # SPE9 area
         boi = 1.2
         swi = 0.25
         
@@ -214,7 +214,7 @@ class ReservoirSimulator:
             original_oil_in_place=ooip,
             recoverable_oil=ooip * recovery_factor,
             recovery_factor=recovery_factor,
-            drive_mechanism="Solution Gas Drive" if recovery_factor < 0.25 else "Water Drive",
+            drive_mechanism="Water Drive" if recovery_factor > 0.25 else "Solution Gas Drive",
             aquifer_strength=min(recovery_factor / 0.3, 1.0),
             average_porosity=avg_porosity,
             connate_water_saturation=swi,
@@ -389,60 +389,203 @@ class ReservoirSimulator:
                 npv += cf / ((1 + discount_rate) ** t)
             return npv
     
-def _calculate_irr(self, cash_flows: List[float]) -> float:
-    try:
-        # Filter out zero cash flows at the end
-        trimmed_cash_flows = []
-        found_non_zero = False
-        for cf in reversed(cash_flows):
-            if abs(cf) > 1 or found_non_zero:
-                trimmed_cash_flows.insert(0, cf)
-                found_non_zero = True
+    def _calculate_irr(self, cash_flows: List[float]) -> float:
+        try:
+            # Filter out zero cash flows at the end
+            trimmed_cash_flows = []
+            found_non_zero = False
+            for cf in reversed(cash_flows):
+                if abs(cf) > 1 or found_non_zero:
+                    trimmed_cash_flows.insert(0, cf)
+                    found_non_zero = True
+            
+            if len(trimmed_cash_flows) < 2:
+                return 0.0
+            
+            irr_value = npf_irr(trimmed_cash_flows)
+            
+            if irr_value is None or np.isnan(irr_value):
+                return self._calculate_irr_manual(trimmed_cash_flows)
+            
+            # Ensure IRR is reasonable
+            if irr_value < -0.5 or irr_value > 2.0:
+                return self._calculate_irr_manual(trimmed_cash_flows)
+            
+            return float(irr_value)
+            
+        except Exception:
+            return self._calculate_irr_manual(cash_flows)
+    
+    def _calculate_irr_manual(self, cash_flows: List[float]) -> float:
+        def npv_func(rate):
+            return sum(cf / ((1 + rate) ** i) for i, cf in enumerate(cash_flows))
         
-        if len(trimmed_cash_flows) < 2:
+        try:
+            # Find reasonable IRR bounds
+            npv_at_0 = npv_func(0)
+            npv_at_01 = npv_func(0.1)
+            npv_at_03 = npv_func(0.3)
+            
+            # If NPV is positive even at high discount rate, IRR is high
+            if npv_at_03 > 0:
+                return 0.5  # Return 50% as conservative estimate
+            
+            # Try to find root
+            for lower_bound in [-0.2, 0.0, 0.05]:
+                for upper_bound in [0.2, 0.5, 1.0]:
+                    try:
+                        return brentq(npv_func, lower_bound, upper_bound, maxiter=100)
+                    except:
+                        continue
+            
+            # Default based on NPV sign
+            if npv_at_0 > 0:
+                return 0.15  # 15% if positive NPV
+            else:
+                return 0.0   # 0% if negative NPV
+                
+        except Exception:
+            return 0.0  # Default to 0% if all fails
+    
+    def _calculate_discounted_payback(self, cash_flows: List[float], discount_rate: float) -> float:
+        if len(cash_flows) < 2:
+            return float('inf')
+        
+        initial_investment = abs(cash_flows[0])
+        cumulative_pv = 0.0
+        
+        for year, cf in enumerate(cash_flows[1:], 1):
+            discounted_cf = cf / ((1 + discount_rate) ** year)
+            cumulative_pv += discounted_cf
+            
+            if cumulative_pv >= initial_investment:
+                if year == 1:
+                    return 1.0
+                
+                prev_cumulative = cumulative_pv - discounted_cf
+                remaining = initial_investment - prev_cumulative
+                fraction = remaining / discounted_cf
+                return year - 1 + fraction
+        
+        return float('inf')
+    
+    def _calculate_break_even_price(self, cash_flows: List[float], total_production: float) -> float:
+        if total_production <= 0:
             return 0.0
         
-        irr_value = npf_irr(trimmed_cash_flows)
-        
-        if irr_value is None or np.isnan(irr_value):
-            return self._calculate_irr_manual(trimmed_cash_flows)
-        
-        # Ensure IRR is reasonable
-        if irr_value < -0.5 or irr_value > 2.0:  # -50% to +200% reasonable range
-            return self._calculate_irr_manual(trimmed_cash_flows)
-        
-        return float(irr_value)
-        
-    except Exception:
-        return self._calculate_irr_manual(cash_flows)
-
-def _calculate_irr_manual(self, cash_flows: List[float]) -> float:
-    def npv_func(rate):
-        return sum(cf / ((1 + rate) ** i) for i, cf in enumerate(cash_flows))
+        total_cost = sum(abs(cf) for cf in cash_flows if cf < 0)
+        return total_cost / total_production
     
-    try:
-        # Find reasonable IRR bounds
-        npv_at_0 = npv_func(0)
-        npv_at_01 = npv_func(0.1)
-        npv_at_03 = npv_func(0.3)
+    def _calculate_economic_limit(self) -> float:
+        return (self.econ_params.fixed_opex / 365) / self.econ_params.opex_per_bbl
+    
+    def _run_uncertainty_analysis(self, production_forecast: Dict) -> Dict:
+        base_npv = 0.0
+        if self.results.get('economic_evaluation'):
+            base_npv = self.results['economic_evaluation'].get('npv', 0.0)
         
-        # If NPV is positive even at high discount rate, IRR is high
-        if npv_at_03 > 0:
-            return 0.5  # Return 50% as conservative estimate
+        scenarios = {
+            'low_case': {'oil_price': -0.20, 'opex': 0.15, 'production': -0.15},
+            'base_case': {'oil_price': 0.00, 'opex': 0.00, 'production': 0.00},
+            'high_case': {'oil_price': 0.20, 'opex': -0.10, 'production': 0.15}
+        }
         
-        # Try to find root
-        for lower_bound in [-0.2, 0.0, 0.05]:
-            for upper_bound in [0.2, 0.5, 1.0]:
-                try:
-                    return brentq(npv_func, lower_bound, upper_bound, maxiter=100)
-                except:
-                    continue
-        
-        # Default based on NPV sign
-        if npv_at_0 > 0:
-            return 0.15  # 15% if positive NPV
-        else:
-            return 0.0   # 0% if negative NPV
+        sensitivity = {}
+        for case_name, variations in scenarios.items():
+            modified_params = EconomicParameters(
+                oil_price=self.econ_params.oil_price * (1 + variations['oil_price']),
+                opex_per_bbl=self.econ_params.opex_per_bbl * (1 + variations['opex'])
+            )
             
-    except Exception:
-        return 0.0  # Default to 0% if all fails
+            modified_production = production_forecast['annual_production'] * (1 + variations['production'])
+            
+            modified_forecast = production_forecast.copy()
+            modified_forecast['annual_production'] = modified_production
+            
+            sim = ReservoirSimulator(self.data, modified_params)
+            economic_results = sim._perform_economic_evaluation(modified_forecast)
+            
+            sensitivity[case_name] = {
+                'npv': economic_results['npv'],
+                'irr': economic_results['irr'],
+                'key_assumptions': variations
+            }
+        
+        tornado_data = []
+        for variable in ['oil_price', 'production', 'opex']:
+            low_npv = sensitivity['low_case']['npv'] if variable in ['oil_price', 'production'] else base_npv
+            high_npv = sensitivity['high_case']['npv'] if variable in ['oil_price', 'production'] else base_npv
+            
+            tornado_data.append({
+                'variable': variable,
+                'low_impact': low_npv - base_npv,
+                'high_impact': high_npv - base_npv,
+                'swing': abs(high_npv - low_npv)
+            })
+        
+        tornado_data.sort(key=lambda x: x['swing'], reverse=True)
+        
+        return {
+            'scenario_analysis': sensitivity,
+            'tornado_analysis': tornado_data,
+            'base_case_npv': base_npv,
+            'npv_range': (sensitivity['low_case']['npv'], sensitivity['high_case']['npv']),
+            'confidence_interval': self._calculate_confidence_interval(sensitivity)
+        }
+    
+    def _calculate_confidence_interval(self, sensitivity: Dict) -> Dict:
+        npvs = [scenario['npv'] for scenario in sensitivity.values()]
+        
+        return {
+            'mean': float(np.mean(npvs)),
+            'std': float(np.std(npvs)),
+            'p10': float(np.percentile(npvs, 10)),
+            'p50': float(np.percentile(npvs, 50)),
+            'p90': float(np.percentile(npvs, 90))
+        }
+    
+    def _calculate_kpis(self, economic_results: Dict, production_forecast: Dict) -> Dict:
+        total_production = np.sum(production_forecast['annual_production'])
+        
+        return {
+            'production_per_well': total_production / len(self.data['wells']) if self.data['wells'] else 0.0,
+            'revenue_per_bbl': economic_results['revenue'] / total_production if total_production > 0 else 0.0,
+            'opex_per_bbl': economic_results['opex'] / total_production if total_production > 0 else 0.0,
+            'netback_per_bbl': (economic_results['revenue'] - economic_results['opex']) / total_production if total_production > 0 else 0.0,
+            'capex_per_bbl': economic_results['capex'] / total_production if total_production > 0 else 0.0,
+            'reserve_replacement_ratio': 1.0,
+            'production_decline_rate': self._calculate_decline_rate(production_forecast['annual_production'])
+        }
+    
+    def _calculate_decline_rate(self, annual_production: np.ndarray) -> float:
+        if len(annual_production) < 2:
+            return 0.0
+        
+        decline_rates = []
+        for i in range(1, len(annual_production)):
+            if annual_production[i-1] > 0:
+                decline = (annual_production[i-1] - annual_production[i]) / annual_production[i-1]
+                decline_rates.append(decline)
+        
+        return np.mean(decline_rates) * 100 if decline_rates else 0.0
+    
+    def _dict_from_dataclass(self, obj):
+        if hasattr(obj, '__dict__'):
+            return {k: v for k, v in obj.__dict__.items() if not k.startswith('_')}
+        return {}
+    
+    def _generate_error_results(self, error_msg: str) -> Dict:
+        return {
+            'error': error_msg,
+            'reservoir_properties': {},
+            'decline_analysis': {},
+            'production_forecast': {},
+            'economic_evaluation': {
+                'npv': 0.0,
+                'irr': 0.0,
+                'roi': 0.0,
+                'payback_period': float('inf')
+            },
+            'uncertainty_analysis': {},
+            'key_performance_indicators': {}
+        }
