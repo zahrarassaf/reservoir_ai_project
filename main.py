@@ -4,7 +4,35 @@ Reservoir Simulation - SPE9 Data Analysis
 With ML integration for enhanced reservoir simulation
 """
 
+# ============================================================================
+# CRITICAL: SET ALL RANDOM SEEDS FOR REPRODUCIBILITY
+# ============================================================================
 import numpy as np
+import random
+import os
+
+# Set global random seed for reproducibility
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+os.environ['PYTHONHASHSEED'] = str(SEED)
+
+# For PyTorch
+try:
+    import torch
+    torch.manual_seed(SEED)
+    torch.cuda.manual_seed(SEED)
+    torch.cuda.manual_seed_all(SEED)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+except ImportError:
+    pass
+
+print(f"Random seed set to: {SEED} for reproducible results")
+
+# ============================================================================
+# REST OF IMPORTS
+# ============================================================================
 import pandas as pd
 import json
 import re
@@ -12,7 +40,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from datetime import datetime
 import sys
-import os
 import traceback
 
 try:
@@ -49,7 +76,7 @@ class SimpleCNN3D(nn.Module):
         return x
 
 class PropertyPredictor:
-    def __init__(self):
+    def __init__(self, seed=SEED):
         if not TORCH_AVAILABLE:
             self.model = None
             return
@@ -59,6 +86,7 @@ class PropertyPredictor:
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model.to(self.device)
+        self.seed = seed
     
     def prepare_data(self, grid_data_3d, properties_dict):
         try:
@@ -159,7 +187,10 @@ class PropertyPredictor:
         
         mse = np.mean((y_true - y_pred) ** 2)
         mae = np.mean(np.abs(y_true - y_pred))
-        r2 = 1 - mse / np.var(y_true) if np.var(y_true) > 0 else 0
+        
+        ss_res = np.sum((y_true - y_pred) ** 2)
+        ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+        r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
         
         return {
             'MSE': float(mse),
@@ -177,7 +208,8 @@ class PropertyPredictor:
                 'model_config': {
                     'input_channels': 1,
                     'output_features': 3
-                }
+                },
+                'seed': self.seed
             }, path)
             return True
         return False
@@ -218,7 +250,14 @@ class SVREconomicPredictor:
     def train(self, X_train, y_train):
         if self.model_type == 'random_forest':
             from sklearn.ensemble import RandomForestRegressor
-            self.model = RandomForestRegressor(n_estimators=100, random_state=42)
+            self.model = RandomForestRegressor(
+                n_estimators=100, 
+                random_state=SEED,
+                max_depth=10,
+                min_samples_split=5,
+                min_samples_leaf=2,
+                n_jobs=-1
+            )
             self.model.fit(X_train, y_train.values)
         else:
             from sklearn.linear_model import LinearRegression
@@ -474,8 +513,10 @@ class PhysicsBasedSimulator:
                 print(f"Truncating to {self.total_cells} values")
                 self.permeability = self.permeability[:self.total_cells]
         else:
+            np.random.seed(SEED)
             self.permeability = np.random.lognormal(mean=np.log(100), sigma=0.8, size=self.total_cells)
         
+        np.random.seed(SEED)
         self.porosity = np.random.uniform(0.1, 0.3, self.total_cells)
         self.saturation = np.random.uniform(0.6, 0.9, self.total_cells)
         
@@ -830,7 +871,7 @@ class MLIntegration:
     
     @staticmethod
     def _create_synthetic_training_data(n_samples=800):
-        np.random.seed(42)
+        np.random.seed(SEED)
         
         training_data = []
         
@@ -995,7 +1036,8 @@ def save_comprehensive_report(sim_results, economics, real_data, ml_report=None)
             'project': 'Reservoir Simulation Analysis',
             'data_source': 'SPE9 Dataset',
             'files_used': real_data['files_found'],
-            'ml_integration': ml_report is not None
+            'ml_integration': ml_report is not None,
+            'random_seed': SEED
         },
         'simulation': {
             'grid_dimensions': (24, 25, 15),
@@ -1095,6 +1137,8 @@ def print_summary(sim_results, economics, real_data, ml_report=None):
 
 def main():
     try:
+        print(f"Starting reproducible analysis with seed: {SEED}")
+        
         loader = RealSPE9DataLoader("data")
         real_data = loader.load_all_data()
         
