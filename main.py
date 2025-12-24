@@ -26,22 +26,22 @@ class SimpleCNN3D(nn.Module):
     """Simple 3D CNN for reservoir property prediction"""
     def __init__(self):
         super().__init__()
-        # Input: [batch, 1, 24, 25, 15]
         self.conv1 = nn.Conv3d(1, 16, kernel_size=3, padding=1)
         self.conv2 = nn.Conv3d(16, 32, kernel_size=3, padding=1)
         self.pool = nn.MaxPool3d(2)
-        self.fc1 = nn.Linear(32 * 12 * 12 * 7, 128)
+        
+        self.fc1 = nn.Linear(32 * 6 * 6 * 3, 128)
         self.fc2 = nn.Linear(128, 64)
-        self.fc3 = nn.Linear(64, 3)  # Output: perm, porosity, saturation
+        self.fc3 = nn.Linear(64, 3)
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(0.3)
     
     def forward(self, x):
-        # x shape: [batch, 1, 24, 25, 15]
         x = self.relu(self.conv1(x))
-        x = self.pool(x)  # [batch, 16, 12, 12, 7]
+        x = self.pool(x)
         x = self.relu(self.conv2(x))
-        x = self.pool(x)  # [batch, 32, 6, 6, 3]
+        x = self.pool(x)
+        
         x = x.view(x.size(0), -1)
         x = self.relu(self.fc1(x))
         x = self.dropout(x)
@@ -63,24 +63,16 @@ class PropertyPredictor:
         self.model.to(self.device)
     
     def prepare_data(self, grid_data_3d, properties_dict):
-        """Prepare data for CNN training"""
         try:
-            # Debug shapes
-            print(f"[DEBUG] Grid data shape: {grid_data_3d.shape}")
-            for k, v in properties_dict.items():
-                print(f"[DEBUG] {k} shape: {v.shape if hasattr(v, 'shape') else 'no shape'}")
+            print(f"Grid data shape: {grid_data_3d.shape}")
             
-            # Handle different input shapes
             if grid_data_3d.ndim == 3:
-                # Add batch and channel dimensions: [1, 1, nx, ny, nz]
                 x_tensor = torch.FloatTensor(grid_data_3d).unsqueeze(0).unsqueeze(0)
             elif grid_data_3d.ndim == 4:
-                # Already has batch dimension: [batch, nx, ny, nz]
                 x_tensor = torch.FloatTensor(grid_data_3d).unsqueeze(1)
             else:
                 x_tensor = torch.FloatTensor(grid_data_3d).unsqueeze(0).unsqueeze(0)
             
-            # Create target tensor
             target_values = []
             for prop_name in ['permeability', 'porosity', 'saturation']:
                 if prop_name in properties_dict:
@@ -94,17 +86,16 @@ class PropertyPredictor:
             
             y_tensor = torch.FloatTensor([target_values])
             
-            print(f"[DEBUG] X tensor shape: {x_tensor.shape}")
-            print(f"[DEBUG] Y tensor shape: {y_tensor.shape}")
+            print(f"X tensor shape: {x_tensor.shape}")
+            print(f"Y tensor shape: {y_tensor.shape}")
             
             return [(x_tensor, y_tensor)], [(x_tensor, y_tensor)]
             
         except Exception as e:
-            print(f"[ERROR] Data preparation failed: {e}")
+            print(f"Data preparation failed: {e}")
             return [], []
     
     def train(self, train_loader, val_loader, epochs=10):
-        """Train the CNN model"""
         if self.model is None:
             return [], []
         
@@ -129,7 +120,6 @@ class PropertyPredictor:
             avg_train_loss = train_loss / len(train_loader)
             train_losses.append(avg_train_loss)
             
-            # Validation
             self.model.eval()
             val_loss = 0.0
             with torch.no_grad():
@@ -144,18 +134,16 @@ class PropertyPredictor:
             val_losses.append(avg_val_loss)
             
             if epoch % 5 == 0:
-                print(f"  Epoch {epoch+1}/{epochs}: Train Loss = {avg_train_loss:.4f}, Val Loss = {avg_val_loss:.4f}")
+                print(f"Epoch {epoch+1}/{epochs}: Train Loss = {avg_train_loss:.4f}, Val Loss = {avg_val_loss:.4f}")
         
         return train_losses, val_losses
     
     def evaluate(self, grid_data_3d, properties_dict):
-        """Evaluate model performance"""
         if self.model is None:
             return {}
         
         self.model.eval()
         
-        # Prepare data
         train_loader, _ = self.prepare_data(grid_data_3d, properties_dict)
         
         if not train_loader:
@@ -168,7 +156,6 @@ class PropertyPredictor:
         with torch.no_grad():
             predictions = self.model(x_batch)
         
-        # Calculate metrics
         y_true = y_batch.cpu().numpy().flatten()
         y_pred = predictions.cpu().numpy().flatten()
         
@@ -183,16 +170,9 @@ class PropertyPredictor:
             'predictions': y_pred.tolist(),
             'targets': y_true.tolist()
         }
-    
-    def save_model(self, path):
-        """Save model to file"""
-        if self.model:
-            torch.save(self.model.state_dict(), path)
 
 class EconomicFeatureEngineer:
-    """Feature engineering for economic predictions"""
     def create_features(self, reservoir_params, economic_params):
-        """Create feature vector from parameters"""
         features = {
             'porosity': reservoir_params.get('avg_porosity', 0.2),
             'permeability': reservoir_params.get('avg_permeability', 100),
@@ -204,7 +184,6 @@ class EconomicFeatureEngineer:
             'discount_rate': economic_params.get('discount_rate', 0.1) * 100
         }
         
-        # Add derived features
         features['recovery_factor'] = features['recoverable_oil'] / features['oil_in_place'] if features['oil_in_place'] > 0 else 0
         features['price_cost_ratio'] = features['oil_price'] / features['opex_per_bbl'] if features['opex_per_bbl'] > 0 else 0
         features['unit_capex'] = features['capex'] / features['recoverable_oil'] if features['recoverable_oil'] > 0 else 0
@@ -212,16 +191,11 @@ class EconomicFeatureEngineer:
         return pd.DataFrame([features])
 
 class SVREconomicPredictor:
-    """SVR for economic predictions (simplified version)"""
     def __init__(self, model_type='random_forest'):
         self.model_type = model_type
         self.model = None
-        self.feature_scaler = None
-        self.target_scaler = None
         
     def prepare_data(self, X, y):
-        """Prepare data for training"""
-        # Simple split for demo
         split_idx = int(len(X) * 0.8)
         X_train = X.iloc[:split_idx]
         X_test = X.iloc[split_idx:]
@@ -231,19 +205,16 @@ class SVREconomicPredictor:
         return X_train, X_test, y_train, y_test
     
     def train(self, X_train, y_train):
-        """Train the model"""
         if self.model_type == 'random_forest':
             from sklearn.ensemble import RandomForestRegressor
             self.model = RandomForestRegressor(n_estimators=100, random_state=42)
             self.model.fit(X_train, y_train.values)
         else:
-            # Linear regression as fallback
             from sklearn.linear_model import LinearRegression
             self.model = LinearRegression()
             self.model.fit(X_train, y_train.values)
     
     def evaluate(self, X_test, y_test):
-        """Evaluate model performance"""
         if self.model is None:
             return {}
         
@@ -265,7 +236,6 @@ class SVREconomicPredictor:
         return metrics
     
     def predict(self, X):
-        """Make predictions"""
         if self.model is None:
             return pd.DataFrame({'npv': [0], 'irr': [0], 'roi': [0], 'payback_period': [0]})
         
@@ -293,7 +263,7 @@ class RealSPE9DataLoader:
         }
         
         if not self.data_dir.exists():
-            print(f"  Data directory not found: {self.data_dir}")
+            print(f"Data directory not found: {self.data_dir}")
             return results
         
         files = list(self.data_dir.glob("*"))
@@ -304,7 +274,6 @@ class RealSPE9DataLoader:
             size_mb = f.stat().st_size / 1024
             print(f"   {f.name:30} {size_mb:6.1f} KB")
         
-        # Parse GRDECL file
         grdecl_file = self.data_dir / "SPE9.GRDECL"
         if grdecl_file.exists():
             print("\nParsing SPE9.GRDECL (grid data)...")
@@ -312,13 +281,12 @@ class RealSPE9DataLoader:
             results['grid_info'] = grid_data
             print(f"   Grid: {grid_data['dimensions']} = {grid_data['total_cells']:,} cells")
         else:
-            print("\n  SPE9.GRDECL not found, using default grid")
+            print("\nSPE9.GRDECL not found, using default grid")
             results['grid_info'] = {
                 'dimensions': (24, 25, 15),
                 'total_cells': 9000
             }
         
-        # Parse permeability values
         perm_file = self.data_dir / "PERMVALUES.DATA"
         if perm_file.exists():
             print("Parsing PERMVALUES.DATA...")
@@ -329,7 +297,6 @@ class RealSPE9DataLoader:
             print("   PERMVALUES.DATA not found, generating synthetic permeability")
             results['properties']['permeability'] = np.random.lognormal(4, 0.5, 9000)
         
-        # Parse tops values
         tops_file = self.data_dir / "TOPSVALUES.DATA"
         if tops_file.exists():
             print("Parsing TOPSVALUES.DATA...")
@@ -337,7 +304,6 @@ class RealSPE9DataLoader:
             results['properties']['tops'] = tops_data
             print(f"   Tops: {len(tops_data)} values loaded")
         
-        # Parse main SPE9 data file
         spe9_file = self.data_dir / "SPE9.DATA"
         if spe9_file.exists():
             print("Parsing SPE9.DATA...")
@@ -346,7 +312,6 @@ class RealSPE9DataLoader:
             dims = spe9_config.get('grid', {}).get('dimensions', (24, 25, 15))
             print(f"   SPE9 Configuration: {dims[0]}×{dims[1]}×{dims[2]}")
         
-        # Find SPE9 variants
         spe9_variants = list(self.data_dir.glob("SPE9_*.DATA"))
         if spe9_variants:
             print(f"\nFound {len(spe9_variants)} SPE9 variants:")
@@ -363,7 +328,6 @@ class RealSPE9DataLoader:
             dimensions = (24, 25, 15)
             total_cells = 24 * 25 * 15
             
-            # Look for SPECGRID
             specgrid_match = re.search(r'SPECGRID\s+(\d+)\s+(\d+)\s+(\d+)', content)
             if specgrid_match:
                 dimensions = tuple(map(int, specgrid_match.groups()))
@@ -375,7 +339,7 @@ class RealSPE9DataLoader:
                 'file_parsed': True
             }
         except Exception as e:
-            print(f"  Error parsing GRDECL: {e}")
+            print(f"Error parsing GRDECL: {e}")
             return {
                 'dimensions': (24, 25, 15),
                 'total_cells': 9000,
@@ -405,7 +369,7 @@ class RealSPE9DataLoader:
             
             return np.array(values)
         except Exception as e:
-            print(f"  Error parsing values file: {e}")
+            print(f"Error parsing values file: {e}")
             return np.array([])
     
     def _parse_spe9_data(self, filepath):
@@ -432,14 +396,12 @@ class RealSPE9DataLoader:
                 if current_section and line != '/':
                     results['sections'][current_section].append(line)
             
-            # Extract dimensions
             for line in results['sections'].get('GRID', []):
                 if 'DIMENS' in line.upper():
                     nums = re.findall(r'\d+', line)
                     if len(nums) >= 3:
                         results['grid']['dimensions'] = tuple(map(int, nums[:3]))
             
-            # Extract wells
             for line in results['sections'].get('SCHEDULE', []):
                 if 'WELSPECS' in line.upper():
                     parts = line.split()
@@ -454,7 +416,7 @@ class RealSPE9DataLoader:
             
             return results
         except Exception as e:
-            print(f"  Error parsing SPE9.DATA: {e}")
+            print(f"Error parsing SPE9.DATA: {e}")
             return {'grid': {}, 'wells': [], 'sections': {}}
 
 class PhysicsBasedSimulator:
@@ -472,25 +434,21 @@ class PhysicsBasedSimulator:
         
         self.total_cells = self.nx * self.ny * self.nz
         
-        # Load or generate permeability
         if 'properties' in self.data and 'permeability' in self.data['properties']:
             self.permeability = self.data['properties']['permeability']
             if len(self.permeability) != self.total_cells:
-                print(f"  Warning: Permeability array size ({len(self.permeability)}) doesn't match grid ({self.total_cells})")
+                print(f"Warning: Permeability array size ({len(self.permeability)}) doesn't match grid ({self.total_cells})")
                 self.permeability = np.resize(self.permeability, self.total_cells)
         else:
             self.permeability = np.random.lognormal(mean=np.log(100), sigma=0.8, size=self.total_cells)
         
-        # Generate other properties
         self.porosity = np.random.uniform(0.1, 0.3, self.total_cells)
         self.saturation = np.random.uniform(0.6, 0.9, self.total_cells)
         
-        # Reshape to 3D
         self.permeability_3d = self.permeability.reshape(self.nx, self.ny, self.nz)
         self.porosity_3d = self.porosity.reshape(self.nx, self.ny, self.nz)
         self.saturation_3d = self.saturation.reshape(self.nx, self.ny, self.nz)
         
-        # Setup wells
         self.wells = self.data.get('wells', [])
         if not self.wells:
             self.wells = [
@@ -501,11 +459,11 @@ class PhysicsBasedSimulator:
                 {'name': 'INJ1', 'i': 12, 'j': 12, 'type': 'INJECTOR'},
             ]
         
-        print(f"   Reservoir setup complete:")
-        print(f"      Grid: {self.nx}×{self.ny}×{self.nz} = {self.total_cells:,} cells")
-        print(f"      Permeability: {np.mean(self.permeability):.1f} ± {np.std(self.permeability):.1f} md")
-        print(f"      Porosity: {np.mean(self.porosity):.3f} ± {np.std(self.porosity):.3f}")
-        print(f"      Wells: {len(self.wells)} wells")
+        print(f"Reservoir setup complete:")
+        print(f"Grid: {self.nx}×{self.ny}×{self.nz} = {self.total_cells:,} cells")
+        print(f"Permeability: {np.mean(self.permeability):.1f} ± {np.std(self.permeability):.1f} md")
+        print(f"Porosity: {np.mean(self.porosity):.3f} ± {np.std(self.porosity):.3f}")
+        print(f"Wells: {len(self.wells)} wells")
         
         return {
             'permeability_3d': self.permeability_3d,
@@ -554,15 +512,15 @@ class PhysicsBasedSimulator:
         well_data = self.calculate_well_productivity()
         
         total_initial_rate = sum(w['base_rate'] for w in well_data)
-        print(f"   Initial production rate: {total_initial_rate:.0f} bpd")
+        print(f"Initial production rate: {total_initial_rate:.0f} bpd")
         
         cell_volume = 20 * 20 * 10
         pore_volume = np.sum(self.porosity) * cell_volume
         oil_in_place = pore_volume * 0.7 / 5.6146
         recoverable_oil = oil_in_place * 0.35
         
-        print(f"   Oil in place: {oil_in_place/1e6:.1f} MM bbl")
-        print(f"   Recoverable oil: {recoverable_oil/1e6:.1f} MM bbl")
+        print(f"Oil in place: {oil_in_place/1e6:.1f} MM bbl")
+        print(f"Recoverable oil: {recoverable_oil/1e6:.1f} MM bbl")
         
         avg_perm = np.mean(self.permeability)
         b_factor = 0.5 + (avg_perm / 1000)
@@ -716,52 +674,48 @@ class MLIntegration:
         print("\nRunning CNN property prediction...")
         
         if not TORCH_AVAILABLE:
-            print("   PyTorch not available, skipping CNN")
+            print("PyTorch not available, skipping CNN")
             return None, None
         
         try:
-            # Debug information
-            print(f"   Input grid shape: {grid_data_3d.shape}")
-            print(f"   Input grid type: {type(grid_data_3d)}")
+            print(f"Input grid shape: {grid_data_3d.shape}")
+            print(f"Input grid type: {type(grid_data_3d)}")
             
             predictor = PropertyPredictor()
             
             if predictor.model is None:
-                print("   CNN model could not be initialized")
+                print("CNN model could not be initialized")
                 return None, None
             
-            # Prepare data
             train_loader, val_loader = predictor.prepare_data(grid_data_3d, reservoir_properties)
             
             if not train_loader:
-                print("   No training data prepared")
+                print("No training data prepared")
                 return None, None
             
-            print("   Training model...")
+            print("Training model...")
             train_losses, val_losses = predictor.train(train_loader, val_loader, epochs=10)
             
             metrics = predictor.evaluate(grid_data_3d, reservoir_properties)
             
             if metrics:
-                print("\n   CNN Model Performance:")
+                print("\nCNN Model Performance:")
                 for metric_name, value in metrics.items():
                     if metric_name not in ['predictions', 'targets']:
-                        print(f"     {metric_name}: {value:.4f}")
+                        print(f"{metric_name}: {value:.4f}")
             
-            # Save model
             results_dir = Path("results")
             results_dir.mkdir(exist_ok=True)
             try:
                 predictor.save_model('results/cnn_reservoir_model.pth')
-                print("   Model saved to results/cnn_reservoir_model.pth")
+                print("Model saved to results/cnn_reservoir_model.pth")
             except Exception as e:
-                print(f"   Could not save model: {e}")
+                print(f"Could not save model: {e}")
             
             return predictor, metrics
             
         except Exception as e:
-            print(f"   CNN model error: {str(e)}")
-            traceback.print_exc()
+            print(f"CNN model error: {str(e)}")
             return None, None
     
     @staticmethod
@@ -769,7 +723,6 @@ class MLIntegration:
         print("\nRunning economic forecasting...")
         
         try:
-            # Create synthetic training data
             historical_data = MLIntegration._create_synthetic_training_data()
             
             engineer = EconomicFeatureEngineer()
@@ -785,7 +738,7 @@ class MLIntegration:
                 y_data.append(case_data['targets'])
             
             if not X_data:
-                print("   No training data generated")
+                print("No training data generated")
                 return None, None
             
             X = pd.concat(X_data, ignore_index=True)
@@ -803,24 +756,23 @@ class MLIntegration:
             metrics = predictor.evaluate(X_test, y_test)
             
             if metrics:
-                print("\n   Model Performance:")
+                print("\nModel Performance:")
                 for target, target_metrics in metrics.items():
-                    print(f"     {target}:")
+                    print(f"{target}:")
                     for metric_name, value in target_metrics.items():
-                        print(f"       {metric_name}: {value:.4f}")
+                        print(f"{metric_name}: {value:.4f}")
             
             current_features = engineer.create_features(reservoir_params, economic_params)
             predictions = predictor.predict(current_features)
             
-            print("\n   Economic predictions for current case:")
+            print("\nEconomic predictions for current case:")
             for target, value in predictions.iloc[0].items():
-                print(f"     {target}: {value:.2f}")
+                print(f"{target}: {value:.2f}")
             
             return predictor, predictions.iloc[0].to_dict()
             
         except Exception as e:
-            print(f"   Economic model error: {str(e)}")
-            traceback.print_exc()
+            print(f"Economic model error: {str(e)}")
             return None, None
     
     @staticmethod
@@ -902,7 +854,6 @@ def create_visualizations(sim_results, economics, real_data, ml_report=None):
     fig, axes = plt.subplots(3, 2, figsize=fig_size)
     axes = axes.flatten()
     
-    # Plot 1: Production profile
     ax1 = axes[0]
     ax1.plot(sim_results['time'], sim_results['oil_rate'], 'b-', linewidth=2, label='Oil Rate')
     ax1.plot(sim_results['time'], sim_results['water_rate'], 'r-', linewidth=2, label='Water Rate')
@@ -912,7 +863,6 @@ def create_visualizations(sim_results, economics, real_data, ml_report=None):
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     
-    # Plot 2: Water cut
     ax2 = axes[1]
     ax2.plot(sim_results['time'], sim_results['water_cut']*100, 'g-', linewidth=2)
     ax2.set_xlabel('Time (years)')
@@ -920,7 +870,6 @@ def create_visualizations(sim_results, economics, real_data, ml_report=None):
     ax2.set_title('Water Cut Development')
     ax2.grid(True, alpha=0.3)
     
-    # Plot 3: Economic metrics
     ax3 = axes[2]
     metrics = ['NPV ($M)', 'IRR (%)', 'ROI (%)', 'Payback']
     values = [
@@ -940,13 +889,12 @@ def create_visualizations(sim_results, economics, real_data, ml_report=None):
         ax3.text(bar.get_x() + bar.get_width()/2., height,
                 f'{value:.1f}', ha='center', va='bottom')
     
-    # Plot 4: Reservoir properties
     ax4 = axes[3]
     ax4.axis('off')
     props = sim_results['reservoir_properties']
     text = f"""
     RESERVOIR PROPERTIES
-    {'='*25}
+    =========================
     Grid: 24x25x15 = 9,000 cells
     Avg Porosity: {props['avg_porosity']:.3f}
     Avg Permeability: {props['avg_permeability']:.0f} md
@@ -955,7 +903,7 @@ def create_visualizations(sim_results, economics, real_data, ml_report=None):
     Recovery Factor: 35%
     
     WELL DATA
-    {'='*25}
+    =========================
     """
     for well in sim_results['well_data'][:5]:
         text += f"{well['well']}: {well['type']} @ ({well['location'][0]},{well['location'][1]})\n"
@@ -965,7 +913,6 @@ def create_visualizations(sim_results, economics, real_data, ml_report=None):
             verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.3))
     
-    # Plot 5: ML results if available
     ax5 = axes[4]
     ax5.axis('off')
     
@@ -978,19 +925,18 @@ def create_visualizations(sim_results, economics, real_data, ml_report=None):
         ml_text += "CNN PROPERTY PREDICTION:\n"
         for metric_name, value in ml_report['cnn_performance'].items():
             if metric_name not in ['predictions', 'targets']:
-                ml_text += f"  {metric_name}: {value:.4f}\n"
+                ml_text += f"{metric_name}: {value:.4f}\n"
     
     if ml_report and ml_report.get('svr_predictions'):
         ml_text += "\nECONOMIC PREDICTIONS:\n"
         for target, value in ml_report['svr_predictions'].items():
-            ml_text += f"  {target}: {value:.2f}\n"
+            ml_text += f"{target}: {value:.2f}\n"
     
     ax5.text(0.1, 0.95, ml_text, transform=ax5.transAxes,
             fontfamily='monospace', fontsize=8,
             verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.3))
     
-    # Hide unused subplot
     axes[5].axis('off')
     
     plt.suptitle('Reservoir Simulation Analysis - SPE9 Data', 
@@ -1050,7 +996,7 @@ def print_summary(sim_results, economics, real_data, ml_report=None):
     
     summary = f"""
     TECHNICAL ANALYSIS:
-    {'='*40}
+    ========================================
     Data Source: SPE9 Dataset
     Grid: 24x25x15 = 9,000 cells
     Simulation: 10 years physics-based simulation
@@ -1060,7 +1006,7 @@ def print_summary(sim_results, economics, real_data, ml_report=None):
     Wells Analyzed: {len(sim_results['well_data'])} wells
     
     ECONOMIC RESULTS:
-    {'='*40}
+    ========================================
     Net Present Value: ${economics['npv']/1e6:.2f} Million
     Internal Rate of Return: {economics['irr']*100:.1f}%
     Return on Investment: {economics['roi']:.1f}%
@@ -1074,7 +1020,7 @@ def print_summary(sim_results, economics, real_data, ml_report=None):
         avg_r2 = cnn_perf.get('R2', 0)
         summary += f"""
     MACHINE LEARNING RESULTS:
-    {'='*40}
+    ========================================
     CNN Property Prediction: {'Implemented' if cnn_perf else 'Not available'}
     SVR Economic Forecasting: {'Implemented' if ml_report['svr_predictions'] else 'Not available'}
     Model Accuracy (R²): {avg_r2:.3f}
@@ -1082,14 +1028,14 @@ def print_summary(sim_results, economics, real_data, ml_report=None):
     
     summary += f"""
     DATA VALIDATION:
-    {'='*40}
+    ========================================
     Data Files: {len(real_data['files_found'])} files loaded
     SPE9 Variants: {len([f for f in real_data['files_found'] if 'SPE9_' in f])} configurations
     Grid Data: {'Available' if 'grid_info' in real_data else 'Not found'}
     Permeability Data: {'Available' if 'permeability' in real_data.get('properties', {}) else 'Synthetic'}
     
     OUTPUT FILES:
-    {'='*40}
+    ========================================
     1. results/spe9_analysis.png - Visualizations
     2. results/spe9_report.json - JSON report
     """
@@ -1104,15 +1050,12 @@ def print_summary(sim_results, economics, real_data, ml_report=None):
 
 def main():
     try:
-        # Load data
         loader = RealSPE9DataLoader("data")
         real_data = loader.load_all_data()
         
-        # Run physics-based simulation
         simulator = PhysicsBasedSimulator(real_data)
         simulation_results = simulator.run_simulation(years=10)
         
-        # Economic analysis
         analyzer = EnhancedEconomicAnalyzer(simulation_results)
         economics = analyzer.analyze(
             oil_price=82.5,
@@ -1126,30 +1069,22 @@ def main():
         
         ml_integration = MLIntegration()
         
-        # Run CNN for property prediction
         cnn_metrics = None
         if 'grid_data' in simulation_results:
             grid_data = simulation_results['grid_data']['permeability_3d']
             
-            # Prepare reservoir properties for CNN
             reservoir_properties = {
                 'permeability': np.mean(grid_data),
                 'porosity': np.mean(simulation_results['grid_data']['porosity_3d']),
                 'saturation': np.mean(simulation_results['grid_data']['saturation_3d'])
             }
             
-            print(f"\n[DEBUG] Preparing CNN input:")
-            print(f"  Grid data shape: {grid_data.shape}")
-            print(f"  Grid data type: {type(grid_data)}")
-            print(f"  Reservoir properties keys: {list(reservoir_properties.keys())}")
-            
             cnn_predictor, cnn_metrics = ml_integration.run_cnn_property_prediction(
                 grid_data, reservoir_properties
             )
         else:
-            print("  No grid data available for CNN")
+            print("No grid data available for CNN")
         
-        # Run SVR for economic prediction
         reservoir_params = simulation_results['reservoir_properties']
         economic_params = {
             'oil_price': economics['oil_price'],
@@ -1163,23 +1098,18 @@ def main():
             reservoir_params, economic_params
         )
         
-        # Generate ML report
         ml_report = ml_integration.generate_ml_report(cnn_metrics, svr_predictions, economics)
         
-        # Create visualizations
         print("\nGenerating visualizations...")
         create_visualizations(simulation_results, economics, real_data, ml_report)
         
-        # Save report
         print("\nSaving comprehensive report...")
         save_comprehensive_report(simulation_results, economics, real_data, ml_report)
         
-        # Print summary
         print_summary(simulation_results, economics, real_data, ml_report)
         
     except Exception as e:
         print(f"\nError in main execution: {str(e)}")
-        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":
