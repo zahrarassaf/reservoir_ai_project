@@ -23,7 +23,6 @@ except ImportError:
     TORCH_AVAILABLE = False
 
 class SimpleCNN3D(nn.Module):
-    """Simple 3D CNN for reservoir property prediction"""
     def __init__(self):
         super().__init__()
         self.conv1 = nn.Conv3d(1, 16, kernel_size=3, padding=1)
@@ -50,7 +49,6 @@ class SimpleCNN3D(nn.Module):
         return x
 
 class PropertyPredictor:
-    """CNN-based reservoir property predictor"""
     def __init__(self):
         if not TORCH_AVAILABLE:
             self.model = None
@@ -170,6 +168,19 @@ class PropertyPredictor:
             'predictions': y_pred.tolist(),
             'targets': y_true.tolist()
         }
+    
+    def save_model(self, path):
+        if self.model:
+            torch.save({
+                'model_state_dict': self.model.state_dict(),
+                'optimizer_state_dict': self.optimizer.state_dict(),
+                'model_config': {
+                    'input_channels': 1,
+                    'output_features': 3
+                }
+            }, path)
+            return True
+        return False
 
 class EconomicFeatureEngineer:
     def create_features(self, reservoir_params, economic_params):
@@ -230,6 +241,14 @@ class SVREconomicPredictor:
             'IRR': {
                 'MSE': mean_squared_error(y_test['irr'], predictions[:, 1]),
                 'R2': r2_score(y_test['irr'], predictions[:, 1])
+            },
+            'ROI': {
+                'MSE': mean_squared_error(y_test['roi'], predictions[:, 2]),
+                'R2': r2_score(y_test['roi'], predictions[:, 2])
+            },
+            'Payback': {
+                'MSE': mean_squared_error(y_test['payback_period'], predictions[:, 3]),
+                'R2': r2_score(y_test['payback_period'], predictions[:, 3])
             }
         }
         
@@ -242,6 +261,13 @@ class SVREconomicPredictor:
         predictions = self.model.predict(X)
         
         return pd.DataFrame(predictions, columns=['npv', 'irr', 'roi', 'payback_period'])
+    
+    def save_model(self, path):
+        if self.model:
+            from joblib import dump
+            dump(self.model, path)
+            return True
+        return False
 
 print("=" * 70)
 print("RESERVOIR SIMULATION - SPE9 DATA ANALYSIS")
@@ -293,6 +319,13 @@ class RealSPE9DataLoader:
             perm_data = self._parse_values_file(perm_file)
             results['properties']['permeability'] = perm_data
             print(f"   Permeability: {len(perm_data)} values loaded")
+            
+            print("\n=== PERMEABILITY DATA VALIDATION ===")
+            print(f"Total values: {len(perm_data)}")
+            print(f"Value range: {np.min(perm_data):.1f} to {np.max(perm_data):.1f} md")
+            print(f"Mean permeability: {np.mean(perm_data):.1f} md")
+            print(f"Std deviation: {np.std(perm_data):.1f} md")
+            print(f"First 10 values: {perm_data[:10]}")
         else:
             print("   PERMVALUES.DATA not found, generating synthetic permeability")
             results['properties']['permeability'] = np.random.lognormal(4, 0.5, 9000)
@@ -438,7 +471,8 @@ class PhysicsBasedSimulator:
             self.permeability = self.data['properties']['permeability']
             if len(self.permeability) != self.total_cells:
                 print(f"Warning: Permeability array size ({len(self.permeability)}) doesn't match grid ({self.total_cells})")
-                self.permeability = np.resize(self.permeability, self.total_cells)
+                print(f"Truncating to {self.total_cells} values")
+                self.permeability = self.permeability[:self.total_cells]
         else:
             self.permeability = np.random.lognormal(mean=np.log(100), sigma=0.8, size=self.total_cells)
         
@@ -464,6 +498,13 @@ class PhysicsBasedSimulator:
         print(f"Permeability: {np.mean(self.permeability):.1f} ± {np.std(self.permeability):.1f} md")
         print(f"Porosity: {np.mean(self.porosity):.3f} ± {np.std(self.porosity):.3f}")
         print(f"Wells: {len(self.wells)} wells")
+        
+        print("\n=== DATA VALIDATION ===")
+        print(f"Permeability values loaded: {len(self.permeability)}")
+        print(f"Permeability range: {np.min(self.permeability):.1f} to {np.max(self.permeability):.1f} md")
+        print(f"First 5 permeability values: {self.permeability[:5]}")
+        print(f"Porosity range: {np.min(self.porosity):.3f} to {np.max(self.porosity):.3f}")
+        print(f"Saturation range: {np.min(self.saturation):.3f} to {np.max(self.saturation):.3f}")
         
         return {
             'permeability_3d': self.permeability_3d,
@@ -707,8 +748,10 @@ class MLIntegration:
             results_dir = Path("results")
             results_dir.mkdir(exist_ok=True)
             try:
-                predictor.save_model('results/cnn_reservoir_model.pth')
-                print("Model saved to results/cnn_reservoir_model.pth")
+                if predictor.save_model('results/cnn_reservoir_model.pth'):
+                    print("Model saved to results/cnn_reservoir_model.pth")
+                else:
+                    print("Failed to save model")
             except Exception as e:
                 print(f"Could not save model: {e}")
             
@@ -749,7 +792,7 @@ class MLIntegration:
             
             print("Training RANDOM_FOREST models for economic prediction...")
             print(f"Features: {X.shape[1]}, Samples: {len(X)}")
-            print("Training for NPV...")
+            print("Training for NPV, IRR, ROI, Payback...")
             
             predictor.train(X_train, y_train)
             
@@ -760,7 +803,7 @@ class MLIntegration:
                 for target, target_metrics in metrics.items():
                     print(f"{target}:")
                     for metric_name, value in target_metrics.items():
-                        print(f"{metric_name}: {value:.4f}")
+                        print(f"  {metric_name}: {value:.4f}")
             
             current_features = engineer.create_features(reservoir_params, economic_params)
             predictions = predictor.predict(current_features)
@@ -768,6 +811,16 @@ class MLIntegration:
             print("\nEconomic predictions for current case:")
             for target, value in predictions.iloc[0].items():
                 print(f"{target}: {value:.2f}")
+            
+            results_dir = Path("results")
+            results_dir.mkdir(exist_ok=True)
+            try:
+                if predictor.save_model('results/svr_economic_model.joblib'):
+                    print("Model saved to results/svr_economic_model.joblib")
+                else:
+                    print("Failed to save SVR model")
+            except Exception as e:
+                print(f"Could not save SVR model: {e}")
             
             return predictor, predictions.iloc[0].to_dict()
             
@@ -932,6 +985,13 @@ def create_visualizations(sim_results, economics, real_data, ml_report=None):
         for target, value in ml_report['svr_predictions'].items():
             ml_text += f"{target}: {value:.2f}\n"
     
+    if ml_report and ml_report.get('comparison_with_physics'):
+        comp = ml_report['comparison_with_physics']
+        ml_text += f"\nPHYSICS vs ML COMPARISON:\n"
+        ml_text += f"NPV Physics: ${comp.get('npv_physics', 0)/1e6:.2f}M\n"
+        ml_text += f"NPV ML: ${comp.get('npv_ml', 0):.2f}M\n"
+        ml_text += f"Difference: {comp.get('difference_percent', 0):.1f}%\n"
+    
     ax5.text(0.1, 0.95, ml_text, transform=ax5.transAxes,
             fontfamily='monospace', fontsize=8,
             verticalalignment='top',
@@ -1013,20 +1073,7 @@ def print_summary(sim_results, economics, real_data, ml_report=None):
     Payback Period: {economics['payback_years']:.1f} years
     Break-even Price: ${economics['break_even_price']:.1f}/bbl
     Capital Investment: ${economics['total_capex']/1e6:.1f} Million
-    """
     
-    if ml_report and ml_report.get('cnn_performance'):
-        cnn_perf = ml_report['cnn_performance']
-        avg_r2 = cnn_perf.get('R2', 0)
-        summary += f"""
-    MACHINE LEARNING RESULTS:
-    ========================================
-    CNN Property Prediction: {'Implemented' if cnn_perf else 'Not available'}
-    SVR Economic Forecasting: {'Implemented' if ml_report['svr_predictions'] else 'Not available'}
-    Model Accuracy (R²): {avg_r2:.3f}
-    """
-    
-    summary += f"""
     DATA VALIDATION:
     ========================================
     Data Files: {len(real_data['files_found'])} files loaded
@@ -1043,6 +1090,27 @@ def print_summary(sim_results, economics, real_data, ml_report=None):
     if ml_report and ml_report.get('model_details', {}).get('cnn_available'):
         summary += """    3. results/cnn_reservoir_model.pth - CNN model
     """
+    
+    if ml_report and ml_report.get('model_details', {}).get('svr_available'):
+        summary += """    4. results/svr_economic_model.joblib - Economic model
+    """
+    
+    if ml_report:
+        summary += f"""
+    MACHINE LEARNING RESULTS:
+    ========================================
+    CNN Property Prediction: {'Implemented' if ml_report['cnn_performance'] else 'Not available'}
+    SVR Economic Forecasting: {'Implemented' if ml_report['svr_predictions'] else 'Not available'}
+    """
+        
+        if ml_report['cnn_performance']:
+            cnn_perf = ml_report['cnn_performance']
+            avg_r2 = cnn_perf.get('R2', 0)
+            summary += f"    CNN Model Accuracy (R²): {avg_r2:.3f}\n"
+        
+        if ml_report.get('comparison_with_physics'):
+            comp = ml_report['comparison_with_physics']
+            summary += f"    NPV Difference (Physics vs ML): {comp.get('difference_percent', 0):.1f}%\n"
     
     print(summary)
     print("\nAnalysis completed successfully!")
@@ -1110,6 +1178,7 @@ def main():
         
     except Exception as e:
         print(f"\nError in main execution: {str(e)}")
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":
