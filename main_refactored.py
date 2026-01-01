@@ -32,7 +32,7 @@ class ProfessionalSPE9Loader:
     
     def load(self):
         """Load and process SPE9 data professionally"""
-        print(f"\n📂 Loading SPE9 benchmark data from: {self.data_dir}")
+        print(f"\n[INFO] Loading SPE9 benchmark data from: {self.data_dir}")
         
         data = {
             'grid_dimensions': (24, 25, 15),
@@ -59,7 +59,7 @@ class ProfessionalSPE9Loader:
         # Load permeability from file if available
         perm_file = self.data_dir / "PERMVALUES.DATA"
         if perm_file.exists():
-            print(f"   • Reading permeability data from: {perm_file.name}")
+            print(f"   [INFO] Reading permeability data from: {perm_file.name}")
             with open(perm_file, 'r') as f:
                 content = f.read()
             numbers = re.findall(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', content)
@@ -75,9 +75,9 @@ class ProfessionalSPE9Loader:
                 'P50': np.percentile(permeability, 50),
                 'P90': np.percentile(permeability, 90)
             }
-            print(f"   • Permeability stats: {perm_stats['mean']:.1f} ± {perm_stats['std']:.1f} md")
+            print(f"   [INFO] Permeability stats: {perm_stats['mean']:.1f} ± {perm_stats['std']:.1f} md")
         else:
-            print(f"   • Generating synthetic permeability field")
+            print(f"   [INFO] Generating synthetic permeability field")
             # Create realistic heterogeneous permeability field
             base_perm = 100.0
             heterogeneity = 2.5
@@ -86,17 +86,23 @@ class ProfessionalSPE9Loader:
                 sigma=heterogeneity, 
                 size=9000
             )
+            perm_stats = {
+                'mean': float(np.mean(permeability)),
+                'std': float(np.std(permeability)),
+                'min': float(np.min(permeability)),
+                'max': float(np.max(permeability)),
+                'P10': float(np.percentile(permeability, 10)),
+                'P50': float(np.percentile(permeability, 50)),
+                'P90': float(np.percentile(permeability, 90))
+            }
         
         # Reshape to 3D grid
         properties['permeability'] = permeability
         properties['permeability_3d'] = permeability.reshape(24, 25, 15)
-        properties['permeability_stats'] = perm_stats if 'perm_stats' in locals() else {
-            'mean': float(np.mean(permeability)),
-            'std': float(np.std(permeability))
-        }
+        properties['permeability_stats'] = perm_stats
         
         # Create correlated porosity field (realistic correlation with permeability)
-        print(f"   • Generating correlated porosity field")
+        print(f"   [INFO] Generating correlated porosity field")
         log_perm = np.log(permeability)
         porosity = 0.15 + 0.1 * (log_perm - np.mean(log_perm)) / np.std(log_perm)
         porosity = np.clip(porosity + np.random.normal(0, 0.02, 9000), 0.1, 0.35)
@@ -105,11 +111,13 @@ class ProfessionalSPE9Loader:
         properties['porosity_3d'] = porosity.reshape(24, 25, 15)
         properties['porosity_stats'] = {
             'mean': float(np.mean(porosity)),
-            'std': float(np.std(porosity))
+            'std': float(np.std(porosity)),
+            'min': float(np.min(porosity)),
+            'max': float(np.max(porosity))
         }
         
         # Initial saturation distribution
-        print(f"   • Setting initial saturations")
+        print(f"   [INFO] Setting initial saturations")
         properties['oil_saturation'] = np.random.uniform(0.65, 0.85, 9000)
         properties['water_saturation'] = 1 - properties['oil_saturation']
         properties['gas_saturation'] = np.zeros(9000)
@@ -137,7 +145,7 @@ class ProfessionalSPE9Loader:
         # Time points for 900 days simulation
         time_points = np.linspace(0, 900, 30)  # Monthly reports for 2.5 years
         
-        print(f"   • Configuring {len(producers)} producers and {len(injectors)} injectors")
+        print(f"   [INFO] Configuring {len(producers)} producers and {len(injectors)} injectors")
         
         # Create producer wells with realistic profiles
         for prod in producers:
@@ -265,7 +273,7 @@ class ProfessionalEconomicAnalyzer:
             'project_life': 15  # years
         }
         
-        print(f"\n💰 Economic parameters initialized:")
+        print(f"\n[ECONOMICS] Economic parameters initialized:")
         print(f"   • Oil price: ${self.config['oil_price']}/bbl")
         print(f"   • Discount rate: {self.config['discount_rate']*100:.1f}%")
         print(f"   • Project life: {self.config['project_life']} years")
@@ -292,6 +300,10 @@ class ProfessionalEconomicAnalyzer:
         days_per_month = 30.4
         cumulative_oil = np.cumsum(total_oil_rate) * days_per_month
         
+        # Calculate peak and initial rates
+        peak_rate = np.max(total_oil_rate) if len(total_oil_rate) > 0 else 0
+        initial_rate = total_oil_rate[0] if len(total_oil_rate) > 0 else 0
+        
         profile = {
             'time_points': time_points,
             'oil_rate': total_oil_rate,
@@ -299,8 +311,8 @@ class ProfessionalEconomicAnalyzer:
             'gas_rate': total_gas_rate,
             'water_cut': total_water_rate / (total_oil_rate + total_water_rate + 1e-10),
             'cumulative_oil': cumulative_oil,
-            'peak_rate': np.max(total_oil_rate),
-            'initial_rate': total_oil_rate[0],
+            'peak_rate': peak_rate,
+            'initial_rate': initial_rate,
             'well_count': len(producers)
         }
         
@@ -308,6 +320,9 @@ class ProfessionalEconomicAnalyzer:
     
     def forecast_production(self, profile, forecast_years=15):
         """Forecast production using decline curve analysis"""
+        if profile is None:
+            return None
+            
         # Extend production profile using decline curve
         historical_days = len(profile['time_points'])
         forecast_days = forecast_years * 365
@@ -335,6 +350,10 @@ class ProfessionalEconomicAnalyzer:
         # Calculate water cut forecast
         water_cut_trend = np.minimum(0.6, 0.05 + 0.0003 * time_days)
         
+        # Calculate peak and initial rates
+        peak_rate = np.max(full_rate) if len(full_rate) > 0 else 0
+        initial_rate = full_rate[0] if len(full_rate) > 0 else 0
+        
         forecast = {
             'time_days': time_days,
             'time_years': time_days / 365,
@@ -343,14 +362,20 @@ class ProfessionalEconomicAnalyzer:
             'water_rate': full_rate * water_cut_trend / (1 - water_cut_trend),
             'cumulative_oil': np.cumsum(full_rate) * 30.4,
             'eur': np.trapz(full_rate, time_days) * 30.4,  # Estimated Ultimate Recovery
-            'decline_rate': decline_rate * 365 * 100  # Annual percentage
+            'decline_rate': decline_rate * 365 * 100,  # Annual percentage
+            'peak_rate': peak_rate,
+            'initial_rate': initial_rate
         }
         
         return forecast
     
     def analyze_economics(self, reservoir_data, production_forecast):
         """Perform comprehensive economic analysis"""
-        print(f"\n📊 Performing comprehensive economic analysis...")
+        print(f"\n[ECONOMICS] Performing comprehensive economic analysis...")
+        
+        if production_forecast is None:
+            print("   [ERROR] No production forecast available")
+            return None
         
         # Calculate capital costs
         producers = len([w for w in reservoir_data['wells'].values() if w['type'] == 'PRODUCER'])
@@ -458,11 +483,11 @@ class ProfessionalEconomicAnalyzer:
             'production_summary': {
                 'total_oil_bbl': float(total_production),
                 'total_oil_mm_bbl': float(total_production / 1e6),
-                'peak_rate_bpd': float(production_forecast['peak_rate']),
-                'initial_rate_bpd': float(production_forecast['initial_rate']),
-                'eur_bbl': float(production_forecast['eur']),
-                'eur_mm_bbl': float(production_forecast['eur'] / 1e6),
-                'decline_rate_percent_per_year': float(production_forecast['decline_rate'])
+                'peak_rate_bpd': float(production_forecast.get('peak_rate', 0)),
+                'initial_rate_bpd': float(production_forecast.get('initial_rate', 0)),
+                'eur_bbl': float(production_forecast.get('eur', 0)),
+                'eur_mm_bbl': float(production_forecast.get('eur', 0) / 1e6),
+                'decline_rate_percent_per_year': float(production_forecast.get('decline_rate', 0))
             },
             
             'unit_economics': {
@@ -489,7 +514,7 @@ class ProfessionalEconomicAnalyzer:
         }
         
         # Print key results
-        print(f"\n📈 Economic Results:")
+        print(f"\n[ECONOMICS] Economic Results:")
         print(f"   • NPV: ${results['economic_metrics']['npv_million']:.1f}M")
         print(f"   • IRR: {results['economic_metrics']['irr_percent']:.1f}%")
         print(f"   • ROI: {results['economic_metrics']['roi_percent']:.1f}%")
@@ -565,21 +590,21 @@ class ProfessionalMLPredictor:
         model_path = Path("results/svr_economic_model.joblib")
         
         if not model_path.exists():
-            print(f"   ⚠️  ML model not found at: {model_path}")
-            print(f"   ℹ️  Running without ML predictions")
+            print(f"   [WARNING] ML model not found at: {model_path}")
+            print(f"   [INFO] Running without ML predictions")
             return False
         
         try:
             self.model = joblib.load(model_path)
-            print(f"   ✅ ML model loaded successfully")
+            print(f"   [SUCCESS] ML model loaded successfully")
             
             # Extract feature information
             if hasattr(self.model, 'feature_names_in_'):
                 self.feature_names = list(self.model.feature_names_in_)
-                print(f"   📊 Model features: {len(self.feature_names)} parameters")
+                print(f"   [INFO] Model features: {len(self.feature_names)} parameters")
                 
                 # Display key features
-                print(f"   🔑 Key features: {', '.join(self.feature_names[:5])}...")
+                print(f"   [INFO] Key features: {', '.join(self.feature_names[:5])}...")
             else:
                 # Default feature set based on training
                 self.feature_names = [
@@ -587,12 +612,12 @@ class ProfessionalMLPredictor:
                     'oil_price', 'opex_per_bbl', 'capex', 'discount_rate',
                     'recovery_factor', 'price_cost_ratio', 'unit_capex'
                 ]
-                print(f"   ℹ️  Using default feature set")
+                print(f"   [INFO] Using default feature set")
             
             return True
             
         except Exception as e:
-            print(f"   ❌ Error loading ML model: {e}")
+            print(f"   [ERROR] Error loading ML model: {e}")
             return False
     
     def prepare_features(self, reservoir_stats, economic_params):
@@ -664,7 +689,7 @@ class ProfessionalMLPredictor:
     def predict(self, reservoir_stats, economic_params):
         """Make professional predictions"""
         if self.model is None:
-            print(f"   ⚠️  No ML model available")
+            print(f"   [WARNING] No ML model available")
             return None
         
         try:
@@ -680,11 +705,11 @@ class ProfessionalMLPredictor:
             # Add confidence intervals
             predictions = self._add_uncertainty(predictions, features_df)
             
-            print(f"   ✅ ML predictions generated")
+            print(f"   [SUCCESS] ML predictions generated")
             return predictions
             
         except Exception as e:
-            print(f"   ❌ ML prediction error: {e}")
+            print(f"   [ERROR] ML prediction error: {e}")
             return None
     
     def _process_prediction(self, raw_prediction):
@@ -743,7 +768,7 @@ class ProfessionalMLPredictor:
 
 def create_professional_report(reservoir_data, economics, ml_predictions):
     """Create professional comprehensive report"""
-    print(f"\n📋 Generating professional report...")
+    print(f"\n[REPORT] Generating professional report...")
     
     # Create report structure
     report = {
@@ -756,14 +781,14 @@ def create_professional_report(reservoir_data, economics, ml_predictions):
         },
         
         'executive_summary': {
-            'project_viability': 'HIGHLY ATTRACTIVE' if economics['economic_metrics']['npv_usd'] > 50e6 else 'MARGINAL',
+            'project_viability': 'HIGHLY ATTRACTIVE' if economics and economics['economic_metrics']['npv_usd'] > 50e6 else 'MARGINAL',
             'key_metrics': {
-                'npv_million': economics['economic_metrics']['npv_million'],
-                'irr_percent': economics['economic_metrics']['irr_percent'],
-                'payback_years': economics['economic_metrics']['payback_years'],
-                'break_even_price': economics['economic_metrics']['break_even_price_usd_per_bbl']
+                'npv_million': economics['economic_metrics']['npv_million'] if economics else 0,
+                'irr_percent': economics['economic_metrics']['irr_percent'] if economics else 0,
+                'payback_years': economics['economic_metrics']['payback_years'] if economics else 0,
+                'break_even_price': economics['economic_metrics']['break_even_price_usd_per_bbl'] if economics else 0
             },
-            'recommendation': 'PROCEED WITH DEVELOPMENT' if economics['validation']['npv_positive'] else 'RE-EVALUATE',
+            'recommendation': 'PROCEED WITH DEVELOPMENT' if economics and economics['validation']['npv_positive'] else 'RE-EVALUATE',
             'risk_level': 'MEDIUM'
         },
         
@@ -779,7 +804,7 @@ def create_professional_report(reservoir_data, economics, ml_predictions):
             'data_quality': reservoir_data['validation']
         },
         
-        'economic_analysis': economics,
+        'economic_analysis': economics if economics else {'status': 'Analysis failed'},
         
         'ml_predictions': ml_predictions if ml_predictions else {
             'status': 'Not available',
@@ -788,14 +813,14 @@ def create_professional_report(reservoir_data, economics, ml_predictions):
         
         'sensitivity_analysis': {
             'oil_price_sensitivity': {
-                'base': economics['configuration']['oil_price'],
-                '-20%': economics['economic_metrics']['npv_million'] * 0.8,
-                '+20%': economics['economic_metrics']['npv_million'] * 1.2
+                'base': economics['configuration']['oil_price'] if economics else 0,
+                '-20%': economics['economic_metrics']['npv_million'] * 0.8 if economics else 0,
+                '+20%': economics['economic_metrics']['npv_million'] * 1.2 if economics else 0
             },
             'capex_sensitivity': {
-                'base': economics['capital_costs']['total_capex_million'],
-                '+25%': economics['economic_metrics']['npv_million'] * 0.85,
-                '-25%': economics['economic_metrics']['npv_million'] * 1.15
+                'base': economics['capital_costs']['total_capex_million'] if economics else 0,
+                '+25%': economics['economic_metrics']['npv_million'] * 0.85 if economics else 0,
+                '-25%': economics['economic_metrics']['npv_million'] * 1.15 if economics else 0
             }
         },
         
@@ -828,7 +853,7 @@ def save_professional_outputs(report, reservoir_data, economics, ml_predictions)
     with open(report_file, 'w') as f:
         json.dump(report, f, indent=2, default=str)
     
-    print(f"   📄 Professional report saved: {report_file}")
+    print(f"   [INFO] Professional report saved: {report_file}")
     
     # 2. Create executive summary
     summary_file = output_dir / f"executive_summary_{timestamp}.txt"
@@ -839,10 +864,11 @@ def save_professional_outputs(report, reservoir_data, economics, ml_predictions)
         f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n")
         
         f.write(f"KEY METRICS:\n")
-        f.write(f"• NPV: ${economics['economic_metrics']['npv_million']:.1f}M\n")
-        f.write(f"• IRR: {economics['economic_metrics']['irr_percent']:.1f}%\n")
-        f.write(f"• Payback: {economics['economic_metrics']['payback_years']:.1f} years\n")
-        f.write(f"• Break-even: ${economics['economic_metrics']['break_even_price_usd_per_bbl']:.1f}/bbl\n\n")
+        if economics:
+            f.write(f"• NPV: ${economics['economic_metrics']['npv_million']:.1f}M\n")
+            f.write(f"• IRR: {economics['economic_metrics']['irr_percent']:.1f}%\n")
+            f.write(f"• Payback: {economics['economic_metrics']['payback_years']:.1f} years\n")
+            f.write(f"• Break-even: ${economics['economic_metrics']['break_even_price_usd_per_bbl']:.1f}/bbl\n\n")
         
         f.write(f"RESERVOIR CHARACTERISTICS:\n")
         f.write(f"• Grid: {reservoir_data['grid_dimensions']}\n")
@@ -852,7 +878,7 @@ def save_professional_outputs(report, reservoir_data, economics, ml_predictions)
         f.write(f"RECOMMENDATION: {report['executive_summary']['recommendation']}\n")
         f.write(f"RISK LEVEL: {report['executive_summary']['risk_level']}\n")
     
-    print(f"   📋 Executive summary saved: {summary_file}")
+    print(f"   [INFO] Executive summary saved: {summary_file}")
     
     # 3. Create professional visualization
     create_professional_visualization(reservoir_data, economics, ml_predictions, timestamp)
@@ -873,11 +899,14 @@ def create_professional_visualization(reservoir_data, economics, ml_predictions,
     ax1 = fig.add_subplot(gs[0, :2])
     metrics = ['NPV ($M)', 'IRR (%)', 'Payback (yrs)']
     
-    traditional = [
-        economics['economic_metrics']['npv_million'],
-        economics['economic_metrics']['irr_percent'],
-        economics['economic_metrics']['payback_years']
-    ]
+    if economics:
+        traditional = [
+            economics['economic_metrics']['npv_million'],
+            economics['economic_metrics']['irr_percent'],
+            economics['economic_metrics']['payback_years']
+        ]
+    else:
+        traditional = [0, 0, 0]
     
     ml = [0, 0, 0]
     if ml_predictions and 'npv' in ml_predictions:
@@ -911,44 +940,56 @@ def create_professional_visualization(reservoir_data, economics, ml_predictions,
     
     # 2. Cash Flow Profile (Top right)
     ax2 = fig.add_subplot(gs[0, 2:])
-    years = list(range(1, len(economics['annual_data']['cash_flows_usd']) + 1))
-    cash_flows = [cf / 1e6 for cf in economics['annual_data']['cash_flows_usd']]
-    
-    colors = ['#2ca02c' if cf > 0 else '#d62728' for cf in cash_flows]
-    bars = ax2.bar(years, cash_flows, color=colors, edgecolor='black', linewidth=0.5)
-    ax2.axhline(y=0, color='black', linestyle='-', linewidth=1)
-    
-    # Highlight payback period
-    payback_year = int(economics['economic_metrics']['payback_years'])
-    if payback_year < len(years):
-        ax2.axvspan(0.5, payback_year + 0.5, alpha=0.1, color='green', label='Payback Period')
-    
-    ax2.set_xlabel('Year', fontsize=11, fontweight='bold')
-    ax2.set_ylabel('Cash Flow ($M)', fontsize=11, fontweight='bold')
-    ax2.set_title('Annual Cash Flow Profile', fontsize=13, fontweight='bold', pad=15)
-    ax2.grid(True, alpha=0.2, linestyle='--', axis='y')
-    ax2.legend(fontsize=10)
+    if economics and economics['annual_data']['cash_flows_usd']:
+        years = list(range(1, len(economics['annual_data']['cash_flows_usd']) + 1))
+        cash_flows = [cf / 1e6 for cf in economics['annual_data']['cash_flows_usd']]
+        
+        colors = ['#2ca02c' if cf > 0 else '#d62728' for cf in cash_flows]
+        bars = ax2.bar(years, cash_flows, color=colors, edgecolor='black', linewidth=0.5)
+        ax2.axhline(y=0, color='black', linestyle='-', linewidth=1)
+        
+        # Highlight payback period
+        payback_year = int(economics['economic_metrics']['payback_years'])
+        if payback_year < len(years):
+            ax2.axvspan(0.5, payback_year + 0.5, alpha=0.1, color='green', label='Payback Period')
+        
+        ax2.set_xlabel('Year', fontsize=11, fontweight='bold')
+        ax2.set_ylabel('Cash Flow ($M)', fontsize=11, fontweight='bold')
+        ax2.set_title('Annual Cash Flow Profile', fontsize=13, fontweight='bold', pad=15)
+        ax2.grid(True, alpha=0.2, linestyle='--', axis='y')
+        ax2.legend(fontsize=10)
+    else:
+        ax2.text(0.5, 0.5, 'No cash flow data available', 
+                ha='center', va='center', fontsize=12, fontweight='bold')
+        ax2.set_title('Annual Cash Flow Profile', fontsize=13, fontweight='bold', pad=15)
+        ax2.axis('off')
     
     # 3. Production Profile (Middle left)
     ax3 = fig.add_subplot(gs[1, :2])
     
-    years = list(range(1, len(economics['annual_data']['production_bbl']) + 1))
-    production = [p / 1e6 for p in economics['annual_data']['production_bbl']]
-    
-    ax3.plot(years, production, 'b-', linewidth=2.5, marker='o', markersize=6, 
-             markerfacecolor='white', markeredgewidth=2, label='Oil Production')
-    ax3.fill_between(years, 0, production, alpha=0.2, color='blue')
-    
-    ax3.set_xlabel('Year', fontsize=11, fontweight='bold')
-    ax3.set_ylabel('Production (MMbbl)', fontsize=11, fontweight='bold')
-    ax3.set_title('Annual Production Forecast', fontsize=13, fontweight='bold', pad=15)
-    ax3.grid(True, alpha=0.2, linestyle='--')
-    ax3.legend(fontsize=10)
-    
-    total_production = sum(economics['annual_data']['production_bbl']) / 1e6
-    ax3.text(0.05, 0.95, f'Total: {total_production:.1f} MMbbl',
-            transform=ax3.transAxes, fontsize=10, fontweight='bold',
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
+    if economics and economics['annual_data']['production_bbl']:
+        years = list(range(1, len(economics['annual_data']['production_bbl']) + 1))
+        production = [p / 1e6 for p in economics['annual_data']['production_bbl']]
+        
+        ax3.plot(years, production, 'b-', linewidth=2.5, marker='o', markersize=6, 
+                 markerfacecolor='white', markeredgewidth=2, label='Oil Production')
+        ax3.fill_between(years, 0, production, alpha=0.2, color='blue')
+        
+        ax3.set_xlabel('Year', fontsize=11, fontweight='bold')
+        ax3.set_ylabel('Production (MMbbl)', fontsize=11, fontweight='bold')
+        ax3.set_title('Annual Production Forecast', fontsize=13, fontweight='bold', pad=15)
+        ax3.grid(True, alpha=0.2, linestyle='--')
+        ax3.legend(fontsize=10)
+        
+        total_production = sum(economics['annual_data']['production_bbl']) / 1e6
+        ax3.text(0.05, 0.95, f'Total: {total_production:.1f} MMbbl',
+                transform=ax3.transAxes, fontsize=10, fontweight='bold',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
+    else:
+        ax3.text(0.5, 0.5, 'No production data available', 
+                ha='center', va='center', fontsize=12, fontweight='bold')
+        ax3.set_title('Annual Production Forecast', fontsize=13, fontweight='bold', pad=15)
+        ax3.axis('off')
     
     # 4. Reservoir Properties (Middle right)
     ax4 = fig.add_subplot(gs[1, 2:])
@@ -976,53 +1017,65 @@ def create_professional_visualization(reservoir_data, economics, ml_predictions,
     # 5. Unit Economics (Bottom left)
     ax5 = fig.add_subplot(gs[2, :2])
     
-    unit_metrics = ['Unit CAPEX\n($/bbl)', 'Unit OPEX\n($/bbl)', 'Netback\n($/bbl)', 'Profit Margin\n(%)']
-    unit_values = [
-        economics['unit_economics']['unit_capex_usd_per_bbl'],
-        economics['unit_economics']['unit_opex_usd_per_bbl'],
-        economics['unit_economics']['netback_usd_per_bbl'],
-        economics['unit_economics']['profit_margin_percent']
-    ]
-    
-    colors = ['#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
-    bars = ax5.bar(unit_metrics, unit_values, color=colors, edgecolor='black', linewidth=1)
-    
-    ax5.set_ylabel('Value', fontsize=11, fontweight='bold')
-    ax5.set_title('Unit Economics Analysis', fontsize=13, fontweight='bold', pad=15)
-    ax5.grid(True, alpha=0.2, linestyle='--', axis='y')
-    
-    for bar, value in zip(bars, unit_values):
-        height = bar.get_height()
-        ax5.text(bar.get_x() + bar.get_width()/2, height,
-                f'{value:.1f}', ha='center', va='bottom', fontsize=10, fontweight='bold')
+    if economics:
+        unit_metrics = ['Unit CAPEX\n($/bbl)', 'Unit OPEX\n($/bbl)', 'Netback\n($/bbl)', 'Profit Margin\n(%)']
+        unit_values = [
+            economics['unit_economics']['unit_capex_usd_per_bbl'],
+            economics['unit_economics']['unit_opex_usd_per_bbl'],
+            economics['unit_economics']['netback_usd_per_bbl'],
+            economics['unit_economics']['profit_margin_percent']
+        ]
+        
+        colors = ['#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
+        bars = ax5.bar(unit_metrics, unit_values, color=colors, edgecolor='black', linewidth=1)
+        
+        ax5.set_ylabel('Value', fontsize=11, fontweight='bold')
+        ax5.set_title('Unit Economics Analysis', fontsize=13, fontweight='bold', pad=15)
+        ax5.grid(True, alpha=0.2, linestyle='--', axis='y')
+        
+        for bar, value in zip(bars, unit_values):
+            height = bar.get_height()
+            ax5.text(bar.get_x() + bar.get_width()/2, height,
+                    f'{value:.1f}', ha='center', va='bottom', fontsize=10, fontweight='bold')
+    else:
+        ax5.text(0.5, 0.5, 'No unit economics data available', 
+                ha='center', va='center', fontsize=12, fontweight='bold')
+        ax5.set_title('Unit Economics Analysis', fontsize=13, fontweight='bold', pad=15)
+        ax5.axis('off')
     
     # 6. Risk Analysis (Bottom right)
     ax6 = fig.add_subplot(gs[2, 2:])
     
-    risks = ['Price -20%', 'CAPEX +25%', 'Production -15%', 'OPEX +20%']
-    npv_impact = [
-        economics['sensitivity_analysis']['oil_price_sensitivity']['-20%'],
-        economics['sensitivity_analysis']['capex_sensitivity']['+25%'],
-        economics['economic_metrics']['npv_million'] * 0.85,
-        economics['economic_metrics']['npv_million'] * 0.9
-    ]
-    
-    base_npv = economics['economic_metrics']['npv_million']
-    impact_pct = [(impact - base_npv) / base_npv * 100 for impact in npv_impact]
-    
-    colors = ['#d62728' if pct < -10 else '#ff7f0e' if pct < -5 else '#2ca02c' for pct in impact_pct]
-    bars = ax6.barh(risks, impact_pct, color=colors, edgecolor='black', linewidth=1)
-    
-    ax6.set_xlabel('NPV Impact (%)', fontsize=11, fontweight='bold')
-    ax6.set_title('Sensitivity Analysis - NPV Impact', fontsize=13, fontweight='bold', pad=15)
-    ax6.grid(True, alpha=0.2, linestyle='--', axis='x')
-    ax6.axvline(x=0, color='black', linestyle='-', linewidth=1)
-    
-    for bar, pct in zip(bars, impact_pct):
-        width = bar.get_width()
-        ax6.text(width, bar.get_y() + bar.get_height()/2,
-                f'{pct:.1f}%', ha='left' if width >= 0 else 'right', 
-                va='center', fontsize=10, fontweight='bold')
+    if economics:
+        risks = ['Price -20%', 'CAPEX +25%', 'Production -15%', 'OPEX +20%']
+        npv_impact = [
+            economics['economic_metrics']['npv_million'] * 0.8,
+            economics['economic_metrics']['npv_million'] * 0.85,
+            economics['economic_metrics']['npv_million'] * 0.85,
+            economics['economic_metrics']['npv_million'] * 0.9
+        ]
+        
+        base_npv = economics['economic_metrics']['npv_million']
+        impact_pct = [(impact - base_npv) / base_npv * 100 for impact in npv_impact]
+        
+        colors = ['#d62728' if pct < -10 else '#ff7f0e' if pct < -5 else '#2ca02c' for pct in impact_pct]
+        bars = ax6.barh(risks, impact_pct, color=colors, edgecolor='black', linewidth=1)
+        
+        ax6.set_xlabel('NPV Impact (%)', fontsize=11, fontweight='bold')
+        ax6.set_title('Sensitivity Analysis - NPV Impact', fontsize=13, fontweight='bold', pad=15)
+        ax6.grid(True, alpha=0.2, linestyle='--', axis='x')
+        ax6.axvline(x=0, color='black', linestyle='-', linewidth=1)
+        
+        for bar, pct in zip(bars, impact_pct):
+            width = bar.get_width()
+            ax6.text(width, bar.get_y() + bar.get_height()/2,
+                    f'{pct:.1f}%', ha='left' if width >= 0 else 'right', 
+                    va='center', fontsize=10, fontweight='bold')
+    else:
+        ax6.text(0.5, 0.5, 'No sensitivity analysis data available', 
+                ha='center', va='center', fontsize=12, fontweight='bold')
+        ax6.set_title('Sensitivity Analysis - NPV Impact', fontsize=13, fontweight='bold', pad=15)
+        ax6.axis('off')
     
     # 7. Executive Summary (Bottom full width)
     ax7 = fig.add_subplot(gs[3, :])
@@ -1031,16 +1084,16 @@ def create_professional_visualization(reservoir_data, economics, ml_predictions,
     summary_text = f"""
     PROFESSIONAL RESERVOIR ANALYSIS REPORT - SPE9 BENCHMARK
     
-    PROJECT VIABILITY: {economics['validation']['npv_positive'] and economics['validation']['irr_acceptable'] and 
-                       economics['validation']['payback_acceptable'] and economics['validation']['break_even_safe']}
+    PROJECT VIABILITY: {'HIGHLY ATTRACTIVE' if economics and economics['validation']['npv_positive'] and economics['validation']['irr_acceptable'] and 
+                       economics['validation']['payback_acceptable'] and economics['validation']['break_even_safe'] else 'MARGINAL'}
     
     KEY FINDINGS:
-    • Economic Attractiveness: {'HIGH' if economics['economic_metrics']['npv_usd'] > 50e6 else 'MODERATE'}
-    • Risk Profile: {'LOW' if all(economics['validation'].values()) else 'MEDIUM'}
+    • Economic Attractiveness: {'HIGH' if economics and economics['economic_metrics']['npv_usd'] > 50e6 else 'MODERATE'}
+    • Risk Profile: {'LOW' if economics and all(economics['validation'].values()) else 'MEDIUM'}
     • ML Model Agreement: {'GOOD' if ml_predictions and abs(ml_predictions.get('npv', 0)/1e6 - economics['economic_metrics']['npv_million']) < 20 else 'MODERATE'}
     
     RECOMMENDATIONS:
-    1. {'Proceed with detailed engineering design' if economics['validation']['npv_positive'] else 'Re-evaluate project economics'}
+    1. {'Proceed with detailed engineering design' if economics and economics['validation']['npv_positive'] else 'Re-evaluate project economics'}
     2. Implement robust reservoir monitoring program
     3. Consider price risk management strategies
     4. Update economic model with quarterly market data
@@ -1065,7 +1118,7 @@ def create_professional_visualization(reservoir_data, economics, ml_predictions,
     plt.savefig(plot_file, dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"   📊 Professional dashboard saved: {plot_file}")
+    print(f"   [INFO] Professional dashboard saved: {plot_file}")
 
 def main():
     """Main professional execution"""
@@ -1081,12 +1134,12 @@ def main():
         reservoir_data = data_loader.load()
         
         # Display validation results
-        print(f"\n📊 Data Validation Results:")
+        print(f"\n[INFO] Data Validation Results:")
         for check in reservoir_data['validation']['checks']:
             print(f"   • {check}")
         
         if reservoir_data['validation']['warnings']:
-            print(f"\n⚠️  Warnings:")
+            print(f"\n[WARNING] Warnings:")
             for warning in reservoir_data['validation']['warnings']:
                 print(f"   • {warning}")
         
@@ -1106,14 +1159,17 @@ def main():
         
         # Forecast production
         production_forecast = economic_analyzer.forecast_production(production_profile)
-        print(f"   • EUR: {production_forecast['eur']/1e6:.1f} MMbbl")
-        print(f"   • Annual decline rate: {production_forecast['decline_rate']:.1f}%")
+        if production_forecast:
+            print(f"   • EUR: {production_forecast['eur']/1e6:.1f} MMbbl")
+            print(f"   • Annual decline rate: {production_forecast['decline_rate']:.1f}%")
         
         print(f"\n[PHASE 3: ECONOMIC ANALYSIS]")
         print("-" * 50)
         
         # Perform comprehensive economic analysis
-        economics = economic_analyzer.analyze_economics(reservoir_data, production_forecast)
+        economics = None
+        if production_forecast:
+            economics = economic_analyzer.analyze_economics(reservoir_data, production_forecast)
         
         print(f"\n[PHASE 4: MACHINE LEARNING INTEGRATION]")
         print("-" * 50)
@@ -1121,34 +1177,35 @@ def main():
         # Initialize ML predictor
         ml_predictor = ProfessionalMLPredictor()
         
-        # Prepare reservoir statistics for ML
-        reservoir_stats = {
-            'avg_porosity': reservoir_data['properties']['porosity_stats']['mean'],
-            'avg_permeability': reservoir_data['properties']['permeability_stats']['mean'],
-            'oil_in_place_mm': 50.0,  # Based on SPE9 benchmark
-            'recoverable_oil_mm': production_forecast['eur'] / 1e6,
-            'heterogeneity': 1.5,
-            'net_pay_ft': 100,
-            'area_acres': 1000
-        }
-        
-        # Prepare economic parameters for ML
-        economic_params = {
-            'oil_price': economic_analyzer.config['oil_price'],
-            'opex_per_bbl': economic_analyzer.config['opex_variable'],
-            'capex_mm': economics['capital_costs']['total_capex_million'],
-            'discount_rate': economic_analyzer.config['discount_rate'],
-            'tax_rate': economic_analyzer.config['tax_rate'],
-            'gas_price': economic_analyzer.config['gas_price']
-        }
-        
         # Make ML predictions
         ml_predictions = None
-        if ml_predictor.model is not None:
+        if economics and ml_predictor.model is not None:
+            # Prepare reservoir statistics for ML
+            reservoir_stats = {
+                'avg_porosity': reservoir_data['properties']['porosity_stats']['mean'],
+                'avg_permeability': reservoir_data['properties']['permeability_stats']['mean'],
+                'oil_in_place_mm': 50.0,  # Based on SPE9 benchmark
+                'recoverable_oil_mm': production_forecast['eur'] / 1e6 if production_forecast else 0,
+                'heterogeneity': 1.5,
+                'net_pay_ft': 100,
+                'area_acres': 1000
+            }
+            
+            # Prepare economic parameters for ML
+            economic_params = {
+                'oil_price': economic_analyzer.config['oil_price'],
+                'opex_per_bbl': economic_analyzer.config['opex_variable'],
+                'capex_mm': economics['capital_costs']['total_capex_million'] if economics else 0,
+                'discount_rate': economic_analyzer.config['discount_rate'],
+                'tax_rate': economic_analyzer.config['tax_rate'],
+                'gas_price': economic_analyzer.config['gas_price']
+            }
+            
+            # Make ML predictions
             ml_predictions = ml_predictor.predict(reservoir_stats, economic_params)
             
             if ml_predictions:
-                print(f"\n🤖 ML Predictions Summary:")
+                print(f"\n[ML] ML Predictions Summary:")
                 print(f"   • NPV: ${ml_predictions.get('npv', 0)/1e6:.1f}M")
                 print(f"   • IRR: {ml_predictions.get('irr', 0):.1f}%")
                 print(f"   • ROI: {ml_predictions.get('roi', 0):.1f}%")
@@ -1170,21 +1227,22 @@ def main():
         print("✅ PROFESSIONAL ANALYSIS COMPLETED SUCCESSFULLY!")
         print("=" * 70)
         
-        print(f"\n📋 EXECUTIVE SUMMARY:")
-        print(f"   • Project NPV: ${economics['economic_metrics']['npv_million']:.1f}M")
-        print(f"   • Project IRR: {economics['economic_metrics']['irr_percent']:.1f}%")
-        print(f"   • Payback Period: {economics['economic_metrics']['payback_years']:.1f} years")
-        print(f"   • Break-even Price: ${economics['economic_metrics']['break_even_price_usd_per_bbl']:.1f}/bbl")
+        print(f"\n[SUMMARY] EXECUTIVE SUMMARY:")
+        if economics:
+            print(f"   • Project NPV: ${economics['economic_metrics']['npv_million']:.1f}M")
+            print(f"   • Project IRR: {economics['economic_metrics']['irr_percent']:.1f}%")
+            print(f"   • Payback Period: {economics['economic_metrics']['payback_years']:.1f} years")
+            print(f"   • Break-even Price: ${economics['economic_metrics']['break_even_price_usd_per_bbl']:.1f}/bbl")
         print(f"   • Recommendation: {report['executive_summary']['recommendation']}")
         
-        print(f"\n📁 PROFESSIONAL OUTPUTS:")
+        print(f"\n[OUTPUT] PROFESSIONAL OUTPUTS:")
         print(f"   • Full Report: {outputs['json_report']}")
         print(f"   • Executive Summary: {outputs['executive_summary']}")
         print(f"   • Dashboard: professional_results/professional_dashboard_*.png")
         
-        print(f"\n🎯 KEY SUCCESS METRICS:")
+        print(f"\n[VALIDATION] KEY SUCCESS METRICS:")
         print(f"   • Data Quality: {reservoir_data['validation']['status']}")
-        print(f"   • Economic Viability: {'PASS' if economics['validation']['npv_positive'] else 'FAIL'}")
+        print(f"   • Economic Viability: {'PASS' if economics and economics['validation']['npv_positive'] else 'FAIL'}")
         print(f"   • ML Integration: {'SUCCESS' if ml_predictions else 'PARTIAL'}")
         
         print(f"\n🏆 PROJECT STATUS: COMPLETE AND PROFESSIONAL")
