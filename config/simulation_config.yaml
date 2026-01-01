@@ -1,0 +1,27 @@
+# config/simulation_config.yaml
+simulation:
+  seed: 42
+  forecast_years: 10
+  grid_dimensions: [24, 25, 15]
+  
+economic:
+  oil_price: 82.5
+  operating_cost: 16.5
+  discount_rate: 0.095
+  capex_per_producer: 3500000
+  capex_per_injector: 2800000
+  
+ml:
+  cnn:
+    epochs: 20
+    batch_size: 16
+    learning_rate: 0.001
+  svr:
+    model_type: "random_forest"
+    n_estimators: 100
+    cv_folds: 5
+
+output:
+  results_dir: "results"
+  save_models: true
+  create_plots: true
