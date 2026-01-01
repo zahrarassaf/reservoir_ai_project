@@ -1,5 +1,5 @@
 """
-CNN for Reservoir Property Prediction
+CNN for Reservoir Property Prediction - FIXED VERSION
 """
 
 import numpy as np
@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -16,64 +16,86 @@ class ReservoirDataset(Dataset):
     
     def __init__(self, grid_data: np.ndarray, 
                  properties: Dict[str, np.ndarray],
+                 patch_size: int = 3,
                  transform=None):
         """
         Args:
-            grid_data: 3D grid data (Nx, Ny, Nz)
-            properties: Dictionary of properties (permeability, porosity, etc.)
+            grid_data: 3D grid data (Nx, Ny, Nz) - shape (24, 25, 15)
+            properties: Dictionary of 2D properties arrays (Ny, Nz)
+            patch_size: Size of 3D patch to extract
             transform: Optional transforms
         """
-        self.grid_data = torch.FloatTensor(grid_data).unsqueeze(0)
+        # grid_data shape: (Nx, Ny, Nz) = (24, 25, 15)
+        # Add batch and channel dimensions: (1, 1, Nx, Ny, Nz)
+        self.grid_data = torch.FloatTensor(grid_data).unsqueeze(0).unsqueeze(0)
         self.properties = {k: torch.FloatTensor(v) for k, v in properties.items()}
+        self.patch_size = patch_size
         self.transform = transform
         
         # Store dimensions
-        self.ny, self.nz = self.grid_data.shape[2], self.grid_data.shape[3]
+        self.nx, self.ny, self.nz = grid_data.shape
         
-    def __len__(self):
-        return self.ny * self.nz
-    
-    def __getitem__(self, idx):
-        # Convert flat index to 2D coordinates
-        y_idx = idx // self.nz
-        z_idx = idx % self.nz
-        
-        # Ensure indices are within bounds
-        y_idx = max(0, min(y_idx, self.ny - 1))
-        z_idx = max(0, min(z_idx, self.nz - 1))
-        
-        # Extract local 3D patch
-        patch_size = 3
+        # Create list of valid patch centers
+        self.valid_indices = []
         half_size = patch_size // 2
         
-        # Get grid dimensions
-        nx, ny, nz = self.grid_data.shape[1], self.grid_data.shape[2], self.grid_data.shape[3]
+        for y in range(self.ny):
+            for z in range(self.nz):
+                # Check if patch can be extracted without going out of bounds
+                y_start = max(0, y - half_size)
+                y_end = min(self.ny, y + half_size + 1)
+                z_start = max(0, z - half_size)
+                z_end = min(self.nz, z + half_size + 1)
+                
+                # Only include if patch is full size (optional, can remove)
+                if (y_end - y_start == patch_size and 
+                    z_end - z_start == patch_size):
+                    self.valid_indices.append((y, z))
         
-        # Initialize patch with zeros
-        patch = torch.zeros((1, nx, patch_size, patch_size))
+        # If no valid indices (edge cells), include all
+        if not self.valid_indices:
+            for y in range(self.ny):
+                for z in range(self.nz):
+                    self.valid_indices.append((y, z))
+    
+    def __len__(self):
+        return len(self.valid_indices)
+    
+    def __getitem__(self, idx):
+        y_idx, z_idx = self.valid_indices[idx]
+        half_size = self.patch_size // 2
         
-        # Extract valid region
+        # Calculate patch boundaries
         y_start = max(0, y_idx - half_size)
-        y_end = min(ny, y_idx + half_size + 1)
+        y_end = min(self.ny, y_idx + half_size + 1)
         z_start = max(0, z_idx - half_size)
-        z_end = min(nz, z_idx + half_size + 1)
+        z_end = min(self.nz, z_idx + half_size + 1)
         
-        # Calculate patch indices
-        patch_y_start = half_size - (y_idx - y_start)
-        patch_y_end = patch_y_start + (y_end - y_start)
-        patch_z_start = half_size - (z_idx - z_start)
-        patch_z_end = patch_z_start + (z_end - z_start)
+        # Calculate padding if needed
+        pad_top = half_size - (y_idx - y_start)
+        pad_bottom = (y_idx + half_size + 1) - y_end
+        pad_left = half_size - (z_idx - z_start)
+        pad_right = (z_idx + half_size + 1) - z_end
         
-        # Fill patch with valid data
-        patch[:, :, patch_y_start:patch_y_end, patch_z_start:patch_z_end] = \
-            self.grid_data[:, :, y_start:y_end, z_start:z_end]
+        # Extract patch with padding if needed
+        patch = self.grid_data[0, 0, :, y_start:y_end, z_start:z_end].clone()
+        
+        # Apply padding if patch is smaller than patch_size
+        if pad_top > 0 or pad_bottom > 0 or pad_left > 0 or pad_right > 0:
+            # Note: PyTorch padding order is (left, right, top, bottom, front, back)
+            # But we're working with 3D: (depth, height, width) -> (Nx, patch_size, patch_size)
+            pad_dims = (pad_left, pad_right, pad_top, pad_bottom)
+            patch = F.pad(patch, pad_dims, mode='constant', value=0)
+        
+        # Add channel dimension: (1, Nx, patch_size, patch_size)
+        patch = patch.unsqueeze(0)
         
         # Get properties for center cell
-        properties = {}
+        property_values = {}
         for prop_name, prop_tensor in self.properties.items():
-            properties[prop_name] = prop_tensor[y_idx, z_idx]
+            property_values[prop_name] = prop_tensor[y_idx, z_idx]
         
-        return patch, properties
+        return patch, property_values
 
 class ResidualBlock(nn.Module):
     
@@ -96,50 +118,81 @@ class ResidualBlock(nn.Module):
 
 class CNNReservoirPredictor(nn.Module):
     
-    def __init__(self, input_channels=1, num_properties=3):
+    def __init__(self, input_channels=1, num_properties=3, nx=24):
         super().__init__()
         
-        # Simplified architecture for faster training
-        self.encoder1 = nn.Sequential(
+        # Input shape: (batch, channels, depth, height, width) = (B, 1, 24, 3, 3)
+        
+        # Encoder
+        self.encoder = nn.Sequential(
             nn.Conv3d(input_channels, 16, 3, padding=1),
+            nn.BatchNorm3d(16),
             nn.ReLU(),
             nn.Conv3d(16, 32, 3, padding=1),
-            nn.ReLU()
-        )
-        
-        self.encoder2 = nn.Sequential(
-            nn.MaxPool3d(2),
+            nn.BatchNorm3d(32),
+            nn.ReLU(),
+            nn.MaxPool3d((2, 1, 1)),  # Reduce depth dimension
             nn.Conv3d(32, 64, 3, padding=1),
+            nn.BatchNorm3d(64),
             nn.ReLU(),
             nn.Conv3d(64, 64, 3, padding=1),
+            nn.BatchNorm3d(64),
             nn.ReLU()
         )
         
+        # Calculate size after encoder
+        self.encoded_depth = nx // 2  # After maxpool with stride 2 in depth
+        
+        # Decoder
         self.decoder = nn.Sequential(
-            nn.ConvTranspose3d(64, 32, kernel_size=2, stride=2),
+            nn.ConvTranspose3d(64, 32, kernel_size=(2, 1, 1), stride=(2, 1, 1)),
+            nn.BatchNorm3d(32),
             nn.ReLU(),
             nn.Conv3d(32, 16, 3, padding=1),
+            nn.BatchNorm3d(16),
             nn.ReLU()
         )
         
         # Property prediction heads
-        self.permeability_head = nn.Conv3d(16, 1, 1)
-        self.porosity_head = nn.Conv3d(16, 1, 1)
-        self.saturation_head = nn.Conv3d(16, 1, 1)
+        self.permeability_head = nn.Sequential(
+            nn.Conv3d(16, 8, 1),
+            nn.ReLU(),
+            nn.Conv3d(8, 1, 1)
+        )
+        self.porosity_head = nn.Sequential(
+            nn.Conv3d(16, 8, 1),
+            nn.ReLU(),
+            nn.Conv3d(8, 1, 1)
+        )
+        self.saturation_head = nn.Sequential(
+            nn.Conv3d(16, 8, 1),
+            nn.ReLU(),
+            nn.Conv3d(8, 1, 1)
+        )
         
     def forward(self, x):
-        enc1 = self.encoder1(x)
-        enc2 = self.encoder2(enc1)
-        dec = self.decoder(enc2)
+        # x shape: (B, 1, 24, 3, 3)
         
-        permeability = self.permeability_head(dec)
-        porosity = self.porosity_head(dec)
-        saturation = self.saturation_head(dec)
+        # Encoder
+        enc = self.encoder(x)  # (B, 64, 12, 3, 3)
+        
+        # Decoder
+        dec = self.decoder(enc)  # (B, 16, 24, 3, 3)
+        
+        # Predict properties
+        permeability = self.permeability_head(dec)  # (B, 1, 24, 3, 3)
+        porosity = self.porosity_head(dec)  # (B, 1, 24, 3, 3)
+        saturation = self.saturation_head(dec)  # (B, 1, 24, 3, 3)
+        
+        # Take mean over spatial dimensions for final prediction
+        permeability_pred = permeability.mean(dim=[2, 3, 4])  # (B, 1)
+        porosity_pred = porosity.mean(dim=[2, 3, 4])  # (B, 1)
+        saturation_pred = saturation.mean(dim=[2, 3, 4])  # (B, 1)
         
         return {
-            'permeability': permeability.squeeze(1),
-            'porosity': porosity.squeeze(1),
-            'saturation': saturation.squeeze(1)
+            'permeability': permeability_pred.squeeze(-1),
+            'porosity': porosity_pred.squeeze(-1),
+            'saturation': saturation_pred.squeeze(-1)
         }
 
 class PropertyPredictor:
@@ -149,6 +202,8 @@ class PropertyPredictor:
             self.device = torch.device(device)
         else:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # Initialize model with correct input dimensions
         self.model = CNNReservoirPredictor().to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
         self.criterion = nn.MSELoss()
@@ -156,19 +211,22 @@ class PropertyPredictor:
         
     def prepare_data(self, grid_data: np.ndarray, 
                     properties: Dict[str, np.ndarray],
-                    train_ratio: float = 0.8):
+                    train_ratio: float = 0.8,
+                    patch_size: int = 3):
         from sklearn.preprocessing import StandardScaler
         from sklearn.model_selection import train_test_split
         
-        # Get dimensions
+        # Validate shapes
         nx, ny, nz = grid_data.shape
-        
-        # Reshape for CNN
-        grid_reshaped = grid_data.reshape(1, nx, ny, nz)
+        print(f"Grid data shape: {grid_data.shape}")
+        print(f"Properties shapes: { {k: v.shape for k, v in properties.items()} }")
         
         # Scale properties
         scaled_properties = {}
         for name, prop in properties.items():
+            if prop.shape != (ny, nz):
+                raise ValueError(f"Property {name} has shape {prop.shape}, expected ({ny}, {nz})")
+            
             scaler = StandardScaler()
             prop_flat = prop.reshape(-1, 1)
             prop_scaled = scaler.fit_transform(prop_flat).reshape(prop.shape)
@@ -176,7 +234,8 @@ class PropertyPredictor:
             self.scaler[name] = scaler
         
         # Create dataset
-        dataset = ReservoirDataset(grid_reshaped, scaled_properties)
+        dataset = ReservoirDataset(grid_data, scaled_properties, patch_size=patch_size)
+        print(f"Dataset created with {len(dataset)} samples")
         
         # Split indices
         indices = np.arange(len(dataset))
@@ -190,6 +249,12 @@ class PropertyPredictor:
         batch_size = 16
         train_loader = DataLoader(dataset, batch_size=batch_size, sampler=train_sampler)
         val_loader = DataLoader(dataset, batch_size=batch_size, sampler=val_sampler)
+        
+        # Test one batch
+        test_batch = next(iter(train_loader))
+        patches, props = test_batch
+        print(f"Batch patches shape: {patches.shape}")
+        print(f"Batch properties shapes: { {k: v.shape for k, v in props.items()} }")
         
         return train_loader, val_loader
     
@@ -205,12 +270,18 @@ class PropertyPredictor:
                 
                 self.optimizer.zero_grad()
                 
+                # Forward pass
                 outputs = self.model(patches)
+                
+                # Calculate loss
                 loss = 0
                 for prop_name in properties:
-                    prop_tensor = properties[prop_name].to(self.device).unsqueeze(1)
-                    loss += self.criterion(outputs[prop_name], prop_tensor)
+                    # properties[prop_name] shape: (batch_size,)
+                    prop_tensor = properties[prop_name].to(self.device)
+                    pred_tensor = outputs[prop_name]
+                    loss += self.criterion(pred_tensor, prop_tensor)
                 
+                # Backward pass
                 loss.backward()
                 self.optimizer.step()
                 train_loss += loss.item()
@@ -226,44 +297,76 @@ class PropertyPredictor:
                     
                     batch_loss = 0
                     for prop_name in properties:
-                        prop_tensor = properties[prop_name].to(self.device).unsqueeze(1)
-                        batch_loss += self.criterion(outputs[prop_name], prop_tensor)
+                        prop_tensor = properties[prop_name].to(self.device)
+                        pred_tensor = outputs[prop_name]
+                        batch_loss += self.criterion(pred_tensor, prop_tensor)
                     
                     val_loss += batch_loss.item()
             
-            # Store losses
+            # Average losses
             avg_train_loss = train_loss / len(train_loader)
             avg_val_loss = val_loss / len(val_loader)
             train_losses.append(avg_train_loss)
             val_losses.append(avg_val_loss)
             
-            if (epoch + 1) % 5 == 0:
-                print(f'   Epoch {epoch+1}/{epochs}: '
-                      f'Train Loss: {avg_train_loss:.4f}, '
-                      f'Val Loss: {avg_val_loss:.4f}')
+            print(f'Epoch {epoch+1}/{epochs}: '
+                  f'Train Loss: {avg_train_loss:.6f}, '
+                  f'Val Loss: {avg_val_loss:.6f}')
         
         return train_losses, val_losses
     
-    def predict(self, grid_data: np.ndarray):
+    def predict(self, grid_data: np.ndarray, patch_size: int = 3):
         self.model.eval()
         
+        nx, ny, nz = grid_data.shape
+        predictions = {
+            'permeability': np.zeros((ny, nz)),
+            'porosity': np.zeros((ny, nz)),
+            'saturation': np.zeros((ny, nz))
+        }
+        counts = np.zeros((ny, nz))
+        
         with torch.no_grad():
-            nx, ny, nz = grid_data.shape
-            grid_tensor = torch.FloatTensor(grid_data).unsqueeze(0).unsqueeze(0).to(self.device)
+            # Create dataset for prediction
+            dummy_props = {
+                'permeability': np.zeros((ny, nz)),
+                'porosity': np.zeros((ny, nz)),
+                'saturation': np.zeros((ny, nz))
+            }
+            dataset = ReservoirDataset(grid_data, dummy_props, patch_size=patch_size)
             
-            outputs = self.model(grid_tensor)
-            
-            predictions = {}
-            for prop_name, pred in outputs.items():
-                pred_np = pred.cpu().numpy().reshape(-1, 1)
-                if self.scaler[prop_name]:
-                    pred_np = self.scaler[prop_name].inverse_transform(pred_np)
-                predictions[prop_name] = pred_np.reshape(ny, nz)
+            for i in range(len(dataset)):
+                patch, _ = dataset[i]
+                patch = patch.unsqueeze(0).to(self.device)  # Add batch dimension
+                
+                # Get prediction
+                outputs = self.model(patch)
+                
+                # Get coordinates
+                y_idx, z_idx = dataset.valid_indices[i]
+                
+                # Store predictions
+                for prop_name in predictions:
+                    pred_value = outputs[prop_name].cpu().numpy()[0]
+                    
+                    # Inverse transform if scaler exists
+                    if self.scaler[prop_name]:
+                        pred_value = self.scaler[prop_name].inverse_transform(
+                            np.array([[pred_value]])
+                        )[0, 0]
+                    
+                    predictions[prop_name][y_idx, z_idx] += pred_value
+                    counts[y_idx, z_idx] += 1
+        
+        # Average predictions for cells with multiple patches
+        for prop_name in predictions:
+            mask = counts > 0
+            predictions[prop_name][mask] /= counts[mask]
         
         return predictions
     
-    def evaluate(self, test_data, true_properties):
-        predictions = self.predict(test_data)
+    def evaluate(self, grid_data, true_properties):
+        predictions = self.predict(grid_data)
         
         from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
         
@@ -272,8 +375,8 @@ class PropertyPredictor:
             pred = predictions[prop_name].flatten()
             true = true_properties[prop_name].flatten()
             
-            # Remove NaN values
-            mask = ~np.isnan(pred) & ~np.isnan(true)
+            # Remove NaN and zero values for MAPE
+            mask = ~np.isnan(pred) & ~np.isnan(true) & (true != 0)
             pred_clean = pred[mask]
             true_clean = true[mask]
             
@@ -282,7 +385,7 @@ class PropertyPredictor:
                     'MAE': mean_absolute_error(true_clean, pred_clean),
                     'RMSE': np.sqrt(mean_squared_error(true_clean, pred_clean)),
                     'R2': r2_score(true_clean, pred_clean),
-                    'MAPE': np.mean(np.abs((true_clean - pred_clean) / np.maximum(true_clean, 1e-10))) * 100
+                    'MAPE': np.mean(np.abs((true_clean - pred_clean) / true_clean)) * 100
                 }
             else:
                 metrics[prop_name] = {
@@ -329,7 +432,7 @@ class PropertyPredictor:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scaler': self.scaler
         }, path)
-        print(f"   Model saved to {path}")
+        print(f"Model saved to {path}")
     
     def load_model(self, path='cnn_reservoir_model.pth'):
         checkpoint = torch.load(path, map_location=self.device)
@@ -338,26 +441,54 @@ class PropertyPredictor:
         self.scaler = checkpoint['scaler']
         print(f"Model loaded from {path}")
 
-if __name__ == "__main__":
-    # Test with sample data
+def test_cnn():
+    """Test function to verify CNN works correctly"""
+    print("Testing CNN model...")
+    
+    # Create synthetic data matching SPE9 dimensions
     Nx, Ny, Nz = 24, 25, 15
+    
+    # Grid data - 3D array
     grid_data = np.random.rand(Nx, Ny, Nz) * 100
     
+    # Properties - 2D arrays (Ny, Nz)
     properties = {
         'permeability': np.random.lognormal(mean=3.0, sigma=0.5, size=(Ny, Nz)),
         'porosity': np.random.normal(loc=0.2, scale=0.05, size=(Ny, Nz)),
         'saturation': np.random.uniform(0.6, 0.9, size=(Ny, Nz))
     }
     
+    print(f"\nData shapes:")
+    print(f"Grid data: {grid_data.shape}")
+    print(f"Properties: { {k: v.shape for k, v in properties.items()} }")
+    
+    # Initialize predictor
     predictor = PropertyPredictor()
+    
+    # Prepare data
+    print("\nPreparing data...")
     train_loader, val_loader = predictor.prepare_data(grid_data, properties)
     
-    print("Training CNN model...")
+    # Train
+    print("\nTraining CNN model...")
     train_losses, val_losses = predictor.train(train_loader, val_loader, epochs=5)
     
+    # Evaluate
+    print("\nEvaluating model...")
     metrics = predictor.evaluate(grid_data, properties)
+    
     print("\nModel Performance:")
     for prop_name, prop_metrics in metrics.items():
         print(f"\n{prop_name.upper()}:")
         for metric_name, value in prop_metrics.items():
             print(f"  {metric_name}: {value:.4f}")
+    
+    # Save model
+    predictor.save_model('test_cnn_model.pth')
+    
+    print("\n✅ CNN test completed successfully!")
+    return predictor
+
+if __name__ == "__main__":
+    # Run test
+    test_cnn()
