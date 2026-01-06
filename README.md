@@ -52,7 +52,7 @@ Required packages: numpy, pandas, matplotlib, scikit-learn, torch (optional)
 Installation
 bash
 # Clone repository
-git clone https://github.com/yourusername/reservoir-ai-simulation.git
+git clone https://github.com/zahrarassaf/reservoir_ai_project
 cd reservoir-ai-simulation
 
 # Install dependencies
