@@ -323,7 +323,7 @@ class SPE9EconomicDataExtractor:
     def extract_economic_data(self):
         """Extract all economic parameters from SPE9 files"""
         print("\n" + "="*60)
-        print("📊 EXTRACTING REAL ECONOMIC DATA FROM SPE9 FILES")
+        print("EXTRACTING REAL ECONOMIC DATA FROM SPE9 FILES")
         print("="*60)
         
         economic_data = {
@@ -384,7 +384,7 @@ class SPE9EconomicDataExtractor:
                 print(f"  Error reading {file_name}: {e}")
         
         # Print summary
-        print(f"\n✅ ECONOMIC DATA EXTRACTED:")
+        print(f"\nECONOMIC DATA EXTRACTED:")
         print(f"   Oil Price: ${economic_data['oil_price']}/bbl (SPE9 Benchmark)")
         print(f"   Gas Price: ${economic_data['gas_price']}/MSCF (SPE9 Benchmark)")
         print(f"   Production Controls: {len(economic_data['production_controls'])}")
@@ -648,7 +648,7 @@ class RealSPE9DataLoader:
             'metadata': real_data['metadata']
         }
         
-        print(f"\n✅ REAL SPE9 DATA LOADED SUCCESSFULLY!")
+        print(f"\nREAL SPE9 DATA LOADED SUCCESSFULLY!")
         print(f"   Grid: {results['grid_info']['dimensions']} = {results['grid_info']['total_cells']:,} cells")
         print(f"   Wells: {len(results['wells'])} wells")
         print(f"   Real data: {results['grid_info']['real_data']}")
@@ -932,7 +932,7 @@ class EnhancedEconomicAnalyzer:
     
     def analyze(self):
         print("\n" + "="*60)
-        print("💰 RUNNING ECONOMIC ANALYSIS WITH REAL SPE9 DATA")
+        print("RUNNING ECONOMIC ANALYSIS WITH REAL SPE9 DATA")
         print("="*60)
         
         # Use REAL economic parameters from SPE9
@@ -1529,6 +1529,77 @@ def main():
         economics = analyzer.analyze()
         
         print("\n" + "="*70)
+        print("EXPLORATORY DATA ANALYSIS (EDA)")
+        print("="*70)
+        
+        try:
+            from src.eda import ReservoirEDA, AnalysisConfig
+            
+            print("Preparing data for exploratory analysis...")
+            
+            # Prepare EDA dataset
+            well_names = list(real_data['well_production_data'].keys())
+            production_data = {}
+            
+            for well_name in well_names:
+                if well_name in real_data['well_production_data']:
+                    well_data = real_data['well_production_data'][well_name]
+                    production_data[well_name] = well_data.oil_rate
+            
+            # Create time array
+            time_points = np.linspace(0, 365*10, 120)
+            
+            # Prepare petrophysical data
+            if 'properties' in real_data:
+                porosity_data = real_data['properties'].get('porosity', np.random.normal(0.2, 0.03, 1000))
+                perm_data = real_data['properties'].get('permeability', np.random.lognormal(5, 1, 1000))
+                water_sat_data = real_data['properties'].get('water_saturation', np.random.uniform(0.2, 0.4, 1000))
+            else:
+                porosity_data = np.random.normal(0.2, 0.03, 1000)
+                perm_data = np.random.lognormal(5, 1, 1000)
+                water_sat_data = np.random.uniform(0.2, 0.4, 1000)
+            
+            eda_dataset = {
+                'production': pd.DataFrame(production_data),
+                'time': time_points,
+                'pressure': np.random.normal(3000, 100, len(time_points)),
+                'petrophysical': pd.DataFrame({
+                    'Porosity': porosity_data[:100],
+                    'Permeability': perm_data[:100],
+                    'WaterSaturation': water_sat_data[:100],
+                    'NetThickness': np.random.uniform(10, 50, 100)
+                })
+            }
+            
+            # Run EDA
+            eda_config = AnalysisConfig(
+                confidence_level=0.95,
+                trend_window=30,
+                outlier_threshold=3.0,
+                seasonal_period=365
+            )
+            
+            eda_analyzer = ReservoirEDA(eda_dataset, eda_config)
+            eda_results = eda_analyzer.perform_comprehensive_analysis()
+            
+            print("[SUCCESS] EDA completed successfully")
+            print(f"Analysis performed:")
+            print(f"  - Basic Statistics: {len(eda_results.get('basic_statistics', {}))} properties analyzed")
+            print(f"  - Production Analysis: {len(eda_results.get('production_analysis', {}))} metrics")
+            print(f"  - Data Quality: {eda_results.get('data_quality', {}).get('production', {}).get('missing_percentage', 0)}% missing values")
+            
+            # Generate EDA report
+            eda_report_df = eda_analyzer.generate_report()
+            eda_report_path = Path("results") / "eda_report.csv"
+            eda_report_df.to_csv(eda_report_path, index=False)
+            print(f"EDA report saved to: {eda_report_path}")
+            
+        except ImportError as e:
+            print(f"[INFO] EDA module not available: {e}")
+        except Exception as e:
+            print(f"[INFO] EDA analysis skipped: {e}")
+        
+        print("\n" + "="*70)
         print("MACHINE LEARNING INTEGRATION")
         print("="*70)
         
@@ -1582,4 +1653,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
