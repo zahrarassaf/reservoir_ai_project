@@ -316,12 +316,10 @@ print("RESERVOIR SIMULATION - SPE9 REAL DATA ANALYSIS")
 print("=" * 70)
 
 class SPE9EconomicDataExtractor:
-    """Extract REAL economic data from SPE9 control files"""
     def __init__(self, data_dir="data"):
         self.data_dir = Path(data_dir)
     
     def extract_economic_data(self):
-        """Extract all economic parameters from SPE9 files"""
         print("\n" + "="*60)
         print("EXTRACTING REAL ECONOMIC DATA FROM SPE9 FILES")
         print("="*60)
@@ -329,9 +327,9 @@ class SPE9EconomicDataExtractor:
         economic_data = {
             'source': 'SPE9_Benchmark',
             'extraction_time': datetime.now().isoformat(),
-            'oil_price': 30.0,  # SPE9 default oil price ($/bbl)
-            'gas_price': 3.5,   # SPE9 default gas price ($/MSCF)
-            'water_injection_cost': 0.5,  # $/bbl
+            'oil_price': 30.0,
+            'gas_price': 3.5,
+            'water_injection_cost': 0.5,
             'operating_costs': {},
             'well_costs': {},
             'production_controls': [],
@@ -340,7 +338,6 @@ class SPE9EconomicDataExtractor:
             'economic_sections_found': []
         }
         
-        # Check all SPE9 control files
         spe9_files = list(self.data_dir.glob("SPE9*.DATA"))
         print(f"\nFound {len(spe9_files)} SPE9 data files for economic analysis")
         
@@ -352,10 +349,8 @@ class SPE9EconomicDataExtractor:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
                 
-                # Extract economic data from this file
                 file_economic_data = self._extract_from_content(content, file_name)
                 
-                # Merge with existing data
                 if 'production_controls' in file_economic_data:
                     economic_data['production_controls'].extend(file_economic_data['production_controls'])
                 if 'injection_controls' in file_economic_data:
@@ -365,7 +360,6 @@ class SPE9EconomicDataExtractor:
                 if 'well_rates' in file_economic_data:
                     economic_data['well_rates'].update(file_economic_data['well_rates'])
                 
-                # Track what we found
                 sections_found = []
                 if file_economic_data.get('production_controls'):
                     sections_found.append(f"WCONPROD({len(file_economic_data['production_controls'])})")
@@ -383,7 +377,6 @@ class SPE9EconomicDataExtractor:
             except Exception as e:
                 print(f"  Error reading {file_name}: {e}")
         
-        # Print summary
         print(f"\nECONOMIC DATA EXTRACTED:")
         print(f"   Oil Price: ${economic_data['oil_price']}/bbl (SPE9 Benchmark)")
         print(f"   Gas Price: ${economic_data['gas_price']}/MSCF (SPE9 Benchmark)")
@@ -395,10 +388,8 @@ class SPE9EconomicDataExtractor:
         return economic_data
     
     def _extract_from_content(self, content, file_name):
-        """Extract economic parameters from file content"""
         economic_data = {}
         
-        # 1. Look for WCONPROD (Well Control for Producers)
         wconprod_pattern = r'WCONPROD\s*\n(.*?)\n/'
         wconprod_matches = re.findall(wconprod_pattern, content, re.DOTALL | re.IGNORECASE)
         
@@ -412,7 +403,6 @@ class SPE9EconomicDataExtractor:
             if all_controls:
                 economic_data['production_controls'] = all_controls
         
-        # 2. Look for WCONINJE (Well Control for Injectors)
         wconinje_pattern = r'WCONINJE\s*\n(.*?)\n/'
         wconinje_matches = re.findall(wconinje_pattern, content, re.DOTALL | re.IGNORECASE)
         
@@ -426,7 +416,6 @@ class SPE9EconomicDataExtractor:
             if all_controls:
                 economic_data['injection_controls'] = all_controls
         
-        # 3. Look for TSTEP (Time Steps)
         tstep_pattern = r'TSTEP\s*\n(.*?)\n/'
         tstep_matches = re.findall(tstep_pattern, content, re.DOTALL | re.IGNORECASE)
         
@@ -440,7 +429,6 @@ class SPE9EconomicDataExtractor:
             if all_time_steps:
                 economic_data['time_controls'] = all_time_steps
         
-        # 4. Extract well rates
         wells = self._extract_well_rates(content)
         if wells:
             economic_data['well_rates'] = wells
@@ -448,7 +436,6 @@ class SPE9EconomicDataExtractor:
         return economic_data
     
     def _parse_wconprod_section(self, section):
-        """Parse WCONPROD section for production controls"""
         controls = []
         lines = section.strip().split('\n')
         
@@ -457,7 +444,6 @@ class SPE9EconomicDataExtractor:
             if not line or line.startswith('--') or '*' in line:
                 continue
             
-            # Simple parsing - split by whitespace
             parts = line.split()
             
             if len(parts) >= 4:
@@ -466,13 +452,12 @@ class SPE9EconomicDataExtractor:
                         'well': parts[0].strip("'"),
                         'status': parts[1],
                         'control_mode': parts[2],
-                        'oil_rate_target': 1000,  # Default
-                        'water_rate_target': 100,  # Default
-                        'gas_rate_target': 500,    # Default
-                        'bhp_target': 1000         # Default
+                        'oil_rate_target': 1000,
+                        'water_rate_target': 100,
+                        'gas_rate_target': 500,
+                        'bhp_target': 1000
                     }
                     
-                    # Look for rate keywords
                     for i in range(3, len(parts)):
                         part = parts[i].upper()
                         if part == 'ORAT' and i + 1 < len(parts):
@@ -499,13 +484,11 @@ class SPE9EconomicDataExtractor:
                     controls.append(control)
                     
                 except Exception as e:
-                    # Skip lines we can't parse
                     continue
         
         return controls
     
     def _parse_wconinje_section(self, section):
-        """Parse WCONINJE section for injection controls"""
         controls = []
         lines = section.strip().split('\n')
         
@@ -523,8 +506,8 @@ class SPE9EconomicDataExtractor:
                         'injector_type': parts[1],
                         'status': parts[2],
                         'control_mode': parts[3],
-                        'surface_rate': 1000,  # Default
-                        'bhp_target': 1000     # Default
+                        'surface_rate': 1000,
+                        'bhp_target': 1000
                     }
                     
                     if len(parts) > 4:
@@ -547,16 +530,13 @@ class SPE9EconomicDataExtractor:
         return controls
     
     def _parse_tstep_section(self, section):
-        """Parse TSTEP section for time controls"""
         time_steps = []
         
-        # Split section into lines
         for line in section.split('\n'):
             line = line.strip()
             if not line or line.startswith('--'):
                 continue
             
-            # Extract numbers from line
             numbers = re.findall(r'\d+\.?\d*', line)
             for num in numbers:
                 try:
@@ -567,10 +547,8 @@ class SPE9EconomicDataExtractor:
         return time_steps
     
     def _extract_well_rates(self, content):
-        """Extract well rates from various sections"""
         wells = {}
         
-        # Look for well specifications
         welspecs_pattern = r'WELSPECS\s*\n(.*?)\n/'
         welspecs_match = re.search(welspecs_pattern, content, re.DOTALL | re.IGNORECASE)
         
@@ -605,7 +583,6 @@ class RealSPE9DataLoader:
     def load_all_data(self):
         print("\nLoading SPE9 datasets with new DataLoader...")
         
-        # Load reservoir data using the new DataLoader
         success = self.real_data_loader.load_all_spe9_data()
         
         if not success:
@@ -614,7 +591,6 @@ class RealSPE9DataLoader:
         
         real_data = self.real_data_loader.get_reservoir_data()
         
-        # Extract REAL economic data from SPE9 files
         economic_data = self.economic_extractor.extract_economic_data()
         
         results = {
@@ -644,7 +620,7 @@ class RealSPE9DataLoader:
                 for well_name in real_data['well_locations']
             ],
             'well_production_data': real_data['wells'],
-            'economic_data': economic_data,  # REAL economic data from SPE9
+            'economic_data': economic_data,
             'metadata': real_data['metadata']
         }
         
@@ -653,7 +629,6 @@ class RealSPE9DataLoader:
         print(f"   Wells: {len(results['wells'])} wells")
         print(f"   Real data: {results['grid_info']['real_data']}")
         
-        # Count production controls
         prod_controls = len(economic_data.get('production_controls', []))
         inj_controls = len(economic_data.get('injection_controls', []))
         print(f"   Economic controls: {prod_controls} production, {inj_controls} injection")
@@ -705,7 +680,6 @@ class PhysicsBasedSimulator:
         
         self.total_cells = self.nx * self.ny * self.nz
         
-        # Use real permeability data
         if 'properties' in self.data and 'permeability' in self.data['properties']:
             self.permeability = self.data['properties']['permeability']
             if len(self.permeability) != self.total_cells:
@@ -721,7 +695,6 @@ class PhysicsBasedSimulator:
             self.permeability = np.random.lognormal(mean=np.log(100), sigma=0.8, size=self.total_cells)
             print("Using synthetic permeability data")
         
-        # Use real porosity data
         if 'properties' in self.data and 'porosity' in self.data['properties']:
             self.porosity = self.data['properties']['porosity']
             if len(self.porosity) != self.total_cells:
@@ -737,11 +710,10 @@ class PhysicsBasedSimulator:
             self.porosity = np.random.uniform(0.1, 0.3, self.total_cells)
             print("Using synthetic porosity data")
         
-        # Use real saturation data if available
         if 'properties' in self.data and 'water_saturation' in self.data['properties']:
             water_sat = self.data['properties']['water_saturation']
             if len(water_sat) == self.total_cells:
-                self.saturation = 1 - water_sat  # Oil saturation
+                self.saturation = 1 - water_sat
                 print(f"Using REAL saturation data: {len(water_sat)} values")
             else:
                 np.random.seed(SEED)
@@ -750,12 +722,10 @@ class PhysicsBasedSimulator:
             np.random.seed(SEED)
             self.saturation = np.random.uniform(0.6, 0.9, self.total_cells)
         
-        # Reshape to 3D
         self.permeability_3d = self.permeability.reshape(self.nx, self.ny, self.nz)
         self.porosity_3d = self.porosity.reshape(self.nx, self.ny, self.nz)
         self.saturation_3d = self.saturation.reshape(self.nx, self.ny, self.nz)
         
-        # Use real wells if available
         self.wells = self.data.get('wells', [])
         if not self.wells:
             self.wells = [
@@ -798,13 +768,11 @@ class PhysicsBasedSimulator:
                 poro = self.porosity[cell_idx]
                 sat = self.saturation[cell_idx]
                 
-                # Try to find REAL rate data from SPE9 control files
                 base_rate = 0
                 rate_source = "calculated"
                 real_data_used = False
                 
                 if well['type'] == 'PRODUCER':
-                    # Look in production controls
                     for control in production_controls:
                         if control.get('well') == well['name']:
                             base_rate = control.get('oil_rate_target', 0)
@@ -812,8 +780,7 @@ class PhysicsBasedSimulator:
                                 rate_source = "SPE9 WCONPROD control"
                                 real_data_used = True
                                 break
-                else:  # INJECTOR
-                    # Look in injection controls
+                else:
                     for control in injection_controls:
                         if control.get('well') == well['name']:
                             base_rate = control.get('surface_rate', 0)
@@ -822,7 +789,6 @@ class PhysicsBasedSimulator:
                                 real_data_used = True
                                 break
                 
-                # If no real data found, calculate based on reservoir properties
                 if base_rate == 0:
                     if well['type'] == 'PRODUCER':
                         base_rate = perm * sat * 15 + poro * 800
@@ -843,7 +809,6 @@ class PhysicsBasedSimulator:
                     'real_data_used': real_data_used
                 })
         
-        # Print summary
         real_data_wells = sum(1 for w in well_rates if w['real_data_used'])
         print(f"  Wells with REAL SPE9 rate data: {real_data_wells}/{len(well_rates)}")
         
@@ -857,31 +822,26 @@ class PhysicsBasedSimulator:
         
         well_data = self.calculate_well_productivity()
         
-        # Calculate initial production rate
         total_initial_rate = sum(w['base_rate'] for w in well_data)
         print(f"Initial production rate: {total_initial_rate:.0f} bpd")
         
-        # Calculate reservoir volumes
-        cell_volume = 20 * 20 * 10  # ft³
+        cell_volume = 20 * 20 * 10
         pore_volume = np.sum(self.porosity) * cell_volume
-        oil_in_place = pore_volume * 0.7 / 5.6146  # Convert to barrels
+        oil_in_place = pore_volume * 0.7 / 5.6146
         recoverable_oil = oil_in_place * 0.35
         
         print(f"Oil in place: {oil_in_place/1e6:.1f} MM bbl")
         print(f"Recoverable oil: {recoverable_oil/1e6:.1f} MM bbl")
         print(f"Recovery factor: 35%")
         
-        # Production decline using Arps equation
         avg_perm = np.mean(self.permeability)
         b_factor = 0.5 + (avg_perm / 1000)
         
         qi = total_initial_rate
         Di = 0.3 / years
         
-        # Arps hyperbolic decline
         oil_rate = qi / (1 + b_factor * Di * time) ** (1/b_factor)
         
-        # Water cut development
         water_cut = np.zeros_like(time)
         for i, t in enumerate(time):
             if t < 2:
@@ -893,12 +853,11 @@ class PhysicsBasedSimulator:
         
         water_rate = oil_rate * water_cut / (1 - water_cut)
         
-        # Reservoir pressure
-        initial_pressure = 3600  # psi
-        cumulative_oil = np.cumsum(oil_rate) * 30.4  # Monthly cumulative
+        initial_pressure = 3600
+        cumulative_oil = np.cumsum(oil_rate) * 30.4
         pressure_drop = (cumulative_oil / recoverable_oil) * 1000
         pressure = initial_pressure - pressure_drop
-        pressure[pressure < 500] = 500  # Minimum pressure
+        pressure[pressure < 500] = 500
         
         return {
             'time': time,
@@ -935,13 +894,11 @@ class EnhancedEconomicAnalyzer:
         print("RUNNING ECONOMIC ANALYSIS WITH REAL SPE9 DATA")
         print("="*60)
         
-        # Use REAL economic parameters from SPE9
-        oil_price = self.economic_data.get('oil_price', 30.0)  # SPE9 default: $30/bbl
-        gas_price = self.economic_data.get('gas_price', 3.5)   # SPE9 default: $3.5/MSCF
+        oil_price = self.economic_data.get('oil_price', 30.0)
+        gas_price = self.economic_data.get('gas_price', 3.5)
         
-        # Industry standard operating costs
-        operating_cost = 16.5  # $/bbl (industry average)
-        discount_rate = 0.095  # 9.5% discount rate
+        operating_cost = 16.5
+        discount_rate = 0.095
         
         print(f"\nUsing REAL SPE9 Economic Parameters:")
         print(f"  Oil Price: ${oil_price}/bbl (SPE9 Benchmark)")
@@ -957,8 +914,7 @@ class EnhancedEconomicAnalyzer:
         
         annual_cash_flows = []
         
-        # Capital expenditure based on well count
-        capex_per_well = 3.5e6  # $3.5M per well
+        capex_per_well = 3.5e6
         capex = len(self.results['well_data']) * capex_per_well
         
         for year in range(years):
@@ -968,7 +924,7 @@ class EnhancedEconomicAnalyzer:
             if end_idx > len(oil_rate):
                 end_idx = len(oil_rate)
             
-            annual_oil = np.sum(oil_rate[start_idx:end_idx]) * 30.4  # Monthly to annual
+            annual_oil = np.sum(oil_rate[start_idx:end_idx]) * 30.4
             
             revenue = annual_oil * oil_price
             opex = annual_oil * operating_cost
@@ -976,12 +932,10 @@ class EnhancedEconomicAnalyzer:
             
             annual_cash_flows.append(annual_cf)
         
-        # Calculate NPV
         npv = -capex
         for year, cf in enumerate(annual_cash_flows, 1):
             npv += cf / ((1 + discount_rate) ** year)
         
-        # Calculate IRR using iterative approach
         def npv_func(rate):
             result = -capex
             for year, cf in enumerate(annual_cash_flows, 1):
@@ -995,23 +949,19 @@ class EnhancedEconomicAnalyzer:
                     irr = test_rate
                     break
         
-        # Payback period
         cumulative_cf = 0
-        payback = years  # Default to full period
+        payback = years
         for year, cf in enumerate(annual_cash_flows, 1):
             cumulative_cf += cf
             if cumulative_cf >= capex:
                 payback = year - 1 + (capex - (cumulative_cf - cf)) / cf
                 break
         
-        # ROI
         roi = (npv / capex) * 100 if capex > 0 else 0
         
-        # Break-even price
         total_oil = np.sum(oil_rate) * 30.4
         break_even = operating_cost + (capex / total_oil) if total_oil > 0 else 0
         
-        # Sensitivity analysis
         base_npv = npv
         high_price_npv = self._sensitivity_analysis(oil_price * 1.2, operating_cost, discount_rate)
         low_price_npv = self._sensitivity_analysis(oil_price * 0.8, operating_cost, discount_rate)
@@ -1050,7 +1000,6 @@ class EnhancedEconomicAnalyzer:
         years = 10
         months_per_year = 12
         
-        # Calculate annual cash flows
         annual_cash_flows = []
         capex = len(self.results['well_data']) * 3.5e6
         
@@ -1068,7 +1017,6 @@ class EnhancedEconomicAnalyzer:
             annual_cf = annual_oil * (oil_price - operating_cost)
             annual_cash_flows.append(annual_cf)
         
-        # Calculate NPV
         npv = -capex
         for year, cf in enumerate(annual_cash_flows, 1):
             npv += cf / ((1 + discount_rate) ** year)
@@ -1110,7 +1058,6 @@ class MLIntegration:
                     if metric_name not in ['predictions', 'targets']:
                         print(f"  {metric_name}: {value:.4f}")
             
-            # Save model
             results_dir = Path("results")
             results_dir.mkdir(exist_ok=True)
             try:
@@ -1132,7 +1079,6 @@ class MLIntegration:
         print("\nRunning economic forecasting...")
         
         try:
-            # Create synthetic training data
             historical_data = MLIntegration._create_synthetic_training_data()
             
             engineer = EconomicFeatureEngineer()
@@ -1171,7 +1117,6 @@ class MLIntegration:
                     for metric_name, value in target_metrics.items():
                         print(f"  {metric_name}: {value:.4f}")
             
-            # Predict for current case
             current_features = engineer.create_features(reservoir_params, economic_params)
             predictions = predictor.predict(current_features)
             
@@ -1179,7 +1124,6 @@ class MLIntegration:
             for target, value in predictions.iloc[0].items():
                 print(f"  {target}: {value:.2f}")
             
-            # Save model
             results_dir = Path("results")
             results_dir.mkdir(exist_ok=True)
             try:
@@ -1263,7 +1207,6 @@ def create_visualizations(sim_results, economics, real_data, ml_report=None):
     fig, axes = plt.subplots(3, 2, figsize=fig_size)
     axes = axes.flatten()
     
-    # Plot 1: Production profile
     ax1 = axes[0]
     ax1.plot(sim_results['time'], sim_results['oil_rate'], 'b-', linewidth=2, label='Oil Rate')
     ax1.plot(sim_results['time'], sim_results['water_rate'], 'r-', linewidth=2, label='Water Rate')
@@ -1273,7 +1216,6 @@ def create_visualizations(sim_results, economics, real_data, ml_report=None):
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     
-    # Plot 2: Water cut
     ax2 = axes[1]
     ax2.plot(sim_results['time'], sim_results['water_cut']*100, 'g-', linewidth=2)
     ax2.set_xlabel('Time (years)')
@@ -1281,7 +1223,6 @@ def create_visualizations(sim_results, economics, real_data, ml_report=None):
     ax2.set_title('Water Cut Development')
     ax2.grid(True, alpha=0.3)
     
-    # Plot 3: Economic metrics
     ax3 = axes[2]
     metrics = ['NPV ($M)', 'IRR (%)', 'ROI (%)', 'Payback']
     values = [
@@ -1301,7 +1242,6 @@ def create_visualizations(sim_results, economics, real_data, ml_report=None):
         ax3.text(bar.get_x() + bar.get_width()/2., height,
                 f'{value:.1f}', ha='center', va='bottom')
     
-    # Plot 4: Reservoir properties
     ax4 = axes[3]
     ax4.axis('off')
     props = sim_results['reservoir_properties']
@@ -1333,7 +1273,6 @@ def create_visualizations(sim_results, economics, real_data, ml_report=None):
             verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.3))
     
-    # Plot 5: ML Results
     ax5 = axes[4]
     ax5.axis('off')
     
@@ -1363,7 +1302,6 @@ def create_visualizations(sim_results, economics, real_data, ml_report=None):
             verticalalignment='top',
             bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.3))
     
-    # Plot 6: Economic parameters
     ax6 = axes[5]
     ax6.axis('off')
     
@@ -1513,15 +1451,12 @@ def main():
     try:
         print(f"Starting reproducible analysis with seed: {SEED}")
         
-        # Load real SPE9 data including economic data
         loader = RealSPE9DataLoader("data")
         real_data = loader.load_all_data()
         
-        # Setup and run simulation
         simulator = PhysicsBasedSimulator(real_data)
         simulation_results = simulator.run_simulation(years=10)
         
-        # Run economic analysis with REAL SPE9 economic data
         analyzer = EnhancedEconomicAnalyzer(
             simulation_results, 
             real_data['economic_data']
@@ -1529,49 +1464,47 @@ def main():
         economics = analyzer.analyze()
         
         print("\n" + "="*70)
-        print("EXPLORATORY DATA ANALYSIS (EDA)")
+        print("ADVANCED EXPLORATORY DATA ANALYSIS")
         print("="*70)
         
         try:
             from src.eda import ReservoirEDA, AnalysisConfig
             
-            print("Preparing data for exploratory analysis...")
+            print("Preparing comprehensive EDA dataset...")
             
-            # Prepare EDA dataset
             well_names = list(real_data['well_production_data'].keys())
-            production_data = {}
             
-            for well_name in well_names:
+            production_data = {}
+            time_points = np.linspace(0, 365*10, 120)
+            
+            for well_name in well_names[:10]:
                 if well_name in real_data['well_production_data']:
                     well_data = real_data['well_production_data'][well_name]
                     production_data[well_name] = well_data.oil_rate
             
-            # Create time array
-            time_points = np.linspace(0, 365*10, 120)
+            if not production_data:
+                production_data = {'Well1': np.random.exponential(1000, 120)}
             
-            # Prepare petrophysical data
-            if 'properties' in real_data:
-                porosity_data = real_data['properties'].get('porosity', np.random.normal(0.2, 0.03, 1000))
-                perm_data = real_data['properties'].get('permeability', np.random.lognormal(5, 1, 1000))
-                water_sat_data = real_data['properties'].get('water_saturation', np.random.uniform(0.2, 0.4, 1000))
-            else:
-                porosity_data = np.random.normal(0.2, 0.03, 1000)
-                perm_data = np.random.lognormal(5, 1, 1000)
-                water_sat_data = np.random.uniform(0.2, 0.4, 1000)
+            pressure_data = np.zeros(len(time_points))
+            if len(time_points) > 0:
+                base_pressure = 3000
+                pressure_data = base_pressure + 100 * np.sin(2 * np.pi * time_points / 365)
+                pressure_data += np.random.randn(len(time_points)) * 50
+            
+            sample_size = min(100, len(real_data['properties']['porosity']))
             
             eda_dataset = {
                 'production': pd.DataFrame(production_data),
                 'time': time_points,
-                'pressure': np.random.normal(3000, 100, len(time_points)),
+                'pressure': pressure_data,
                 'petrophysical': pd.DataFrame({
-                    'Porosity': porosity_data[:100],
-                    'Permeability': perm_data[:100],
-                    'WaterSaturation': water_sat_data[:100],
-                    'NetThickness': np.random.uniform(10, 50, 100)
+                    'Porosity': real_data['properties']['porosity'][:sample_size],
+                    'Permeability': real_data['properties']['permeability'][:sample_size],
+                    'WaterSaturation': real_data['properties']['water_saturation'][:sample_size],
+                    'NetThickness': np.random.uniform(10, 50, sample_size)
                 })
             }
             
-            # Run EDA
             eda_config = AnalysisConfig(
                 confidence_level=0.95,
                 trend_window=30,
@@ -1582,22 +1515,50 @@ def main():
             eda_analyzer = ReservoirEDA(eda_dataset, eda_config)
             eda_results = eda_analyzer.perform_comprehensive_analysis()
             
-            print("[SUCCESS] EDA completed successfully")
-            print(f"Analysis performed:")
-            print(f"  - Basic Statistics: {len(eda_results.get('basic_statistics', {}))} properties analyzed")
-            print(f"  - Production Analysis: {len(eda_results.get('production_analysis', {}))} metrics")
-            print(f"  - Data Quality: {eda_results.get('data_quality', {}).get('production', {}).get('missing_percentage', 0)}% missing values")
+            print("Advanced EDA completed:")
             
-            # Generate EDA report
-            eda_report_df = eda_analyzer.generate_report()
-            eda_report_path = Path("results") / "eda_report.csv"
-            eda_report_df.to_csv(eda_report_path, index=False)
-            print(f"EDA report saved to: {eda_report_path}")
+            if eda_results['basic_statistics']:
+                stats_count = len(eda_results['basic_statistics'])
+                print(f"  - Basic Statistics: {stats_count} properties analyzed")
+            
+            if eda_results.get('production_analysis'):
+                prod_analysis = eda_results['production_analysis']
+                if 'total_production' in prod_analysis:
+                    avg_rate = prod_analysis['total_production'].get('mean', 0)
+                    print(f"  - Production Analysis: Average rate = {avg_rate:.0f} bbl/day")
+            
+            if eda_results.get('decline_analysis'):
+                decline_count = len(eda_results['decline_analysis'])
+                print(f"  - Decline Analysis: {decline_count} wells analyzed")
+            
+            if eda_results.get('material_balance'):
+                mb = eda_results['material_balance']
+                if 'voidage_replacement_ratio' in mb:
+                    vrr = mb['voidage_replacement_ratio']
+                    print(f"  - Material Balance: VRR = {vrr:.2f}")
+            
+            if eda_results.get('petrophysical_analysis'):
+                petro_count = len(eda_results['petrophysical_analysis'])
+                print(f"  - Petrophysical Analysis: {petro_count} properties analyzed")
+            
+            if eda_results.get('data_quality'):
+                dq = eda_results['data_quality']
+                if 'production' in dq:
+                    missing_pct = dq['production'].get('missing_percentage', 0)
+                    print(f"  - Data Quality: {missing_pct:.1f}% missing values")
+            
+            eda_report = eda_analyzer.generate_report()
+            results_dir = Path("results")
+            results_dir.mkdir(exist_ok=True)
+            
+            eda_report_path = results_dir / "advanced_eda_report.csv"
+            eda_report.to_csv(eda_report_path, index=False)
+            print(f"Advanced EDA report saved to: {eda_report_path}")
             
         except ImportError as e:
-            print(f"[INFO] EDA module not available: {e}")
+            print(f"EDA module not available: {e}")
         except Exception as e:
-            print(f"[INFO] EDA analysis skipped: {e}")
+            print(f"Advanced EDA analysis skipped: {e}")
         
         print("\n" + "="*70)
         print("MACHINE LEARNING INTEGRATION")
@@ -1605,7 +1566,6 @@ def main():
         
         ml_integration = MLIntegration()
         
-        # Run CNN property prediction if grid data is available
         cnn_metrics = None
         if 'grid_data' in simulation_results:
             grid_data = simulation_results['grid_data']['permeability_3d']
@@ -1622,7 +1582,6 @@ def main():
         else:
             print("No grid data available for CNN")
         
-        # Run SVR economic prediction
         reservoir_params = simulation_results['reservoir_properties']
         economic_params = {
             'oil_price': economics['economic_parameters']['oil_price'],
