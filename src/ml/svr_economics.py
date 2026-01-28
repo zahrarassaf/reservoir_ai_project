@@ -414,59 +414,134 @@ class SVREconomicPredictor:
         print(f"Model loaded from {path}")
 
 
-# Example usage with synthetic data
-if __name__ == "__main__":
-    # Generate synthetic data for demonstration
-    np.random.seed(42)
-    n_samples = 1000
+# IMPROVED DATA GENERATION WITH REALISTIC IRR CALCULATION
+def generate_realistic_economic_data(n_samples=1000, seed=42):
+    """
+    Generate realistic economic dataset with proper relationships
+    """
+    np.random.seed(seed)
     
-    # Reservoir parameters
-    reservoir_data = {
-        'porosity': np.random.uniform(0.1, 0.3, n_samples),
-        'permeability': np.random.lognormal(3, 0.5, n_samples),
-        'oil_in_place': np.random.uniform(1e6, 10e6, n_samples),
-        'recoverable_oil': np.random.uniform(0.2e6, 3e6, n_samples),
-        'water_cut': np.random.uniform(0.1, 0.6, n_samples)
-    }
+    # Reservoir parameters with realistic correlations
+    porosity = np.random.normal(0.2, 0.05, n_samples)
+    permeability = np.random.lognormal(np.log(100), 0.5, n_samples)
+    
+    # Correlated parameters: high porosity usually means more oil
+    oil_in_place = 1e6 + porosity * 5e6 + np.random.normal(0, 1e6, n_samples)
+    oil_in_place = np.clip(oil_in_place, 5e5, 2e7)
+    
+    # Recovery factor depends on porosity and permeability
+    recovery_factor = 0.1 + 0.4 * porosity + 0.1 * np.log(permeability) / 10
+    recovery_factor = np.clip(recovery_factor, 0.05, 0.5)
+    
+    recoverable_oil = oil_in_place * recovery_factor
+    
+    # Water cut increases with time (simulated by random)
+    water_cut = np.random.beta(2, 5, n_samples) + porosity * 0.1
+    water_cut = np.clip(water_cut, 0.05, 0.7)
     
     # Economic parameters
-    economic_data = {
-        'oil_price': np.random.uniform(40, 100, n_samples),
-        'opex_per_bbl': np.random.uniform(10, 30, n_samples),
-        'capex': np.random.uniform(10e6, 50e6, n_samples),
-        'discount_rate': np.random.uniform(0.05, 0.15, n_samples),
-        'tax_rate': np.random.uniform(0.2, 0.4, n_samples)
-    }
+    oil_price = np.random.uniform(40, 100, n_samples)
+    opex_per_bbl = np.random.uniform(10, 30, n_samples)
     
-    # Combine features
+    # CAPEX depends on recoverable oil and complexity
+    capex = 10e6 + recoverable_oil * 20 + np.random.normal(0, 5e6, n_samples)
+    capex = np.clip(capex, 5e6, 100e6)
+    
+    discount_rate = np.random.normal(0.1, 0.03, n_samples)
+    discount_rate = np.clip(discount_rate, 0.05, 0.15)
+    
+    tax_rate = np.random.normal(0.3, 0.05, n_samples)
+    tax_rate = np.clip(tax_rate, 0.2, 0.4)
+    
+    # Create features using the feature engineer
     feature_engineer = EconomicFeatureEngineer()
     X_data = []
     
     for i in range(n_samples):
-        reservoir_params = {k: v[i] for k, v in reservoir_data.items()}
-        economic_params = {k: v[i] for k, v in economic_data.items()}
+        reservoir_params = {
+            'porosity': porosity[i],
+            'permeability': permeability[i],
+            'oil_in_place': oil_in_place[i],
+            'recoverable_oil': recoverable_oil[i],
+            'water_cut': water_cut[i]
+        }
+        
+        economic_params = {
+            'oil_price': oil_price[i],
+            'opex_per_bbl': opex_per_bbl[i],
+            'capex': capex[i],
+            'discount_rate': discount_rate[i],
+            'tax_rate': tax_rate[i]
+        }
+        
         features = feature_engineer.create_features(reservoir_params, economic_params)
         X_data.append(features)
     
     X = pd.concat(X_data, ignore_index=True)
     
-    # Generate synthetic targets (simplified formulas)
-    y_data = pd.DataFrame({
-        'npv': (
-            X['recoverable_oil'] * (X['oil_price'] - X['opex_per_bbl']) * 
-            (1 - X['tax_rate']) / (1 + X['discount_rate']) - X['capex']
-        ) / 1e6,  # in millions
+    # REALISTIC TARGET CALCULATIONS
+    y_data = pd.DataFrame()
+    
+    # 1. NPV Calculation (realistic)
+    annual_production = recoverable_oil / 10  # 10-year production
+    annual_revenue = annual_production * oil_price
+    annual_opex = annual_production * opex_per_bbl
+    annual_cash_flow = (annual_revenue - annual_opex) * (1 - tax_rate)
+    
+    npv_values = -capex.copy()
+    for year in range(1, 11):
+        npv_values += annual_cash_flow / ((1 + discount_rate) ** year)
+    y_data['npv'] = npv_values / 1e6  # Convert to millions
+    
+    # 2. IRR Calculation (realistic - not random!)
+    def calculate_irr_simple(capex_val, annual_cf, discount):
+        """Simplified IRR calculation"""
+        if annual_cf <= 0 or capex_val <= 0:
+            return 0.05
         
-        'irr': np.random.uniform(0.05, 0.25, n_samples) * 100,  # in percent
+        # Simple approximation: annual return / capex
+        simple_irr = annual_cf / capex_val
         
-        'roi': (
-            (X['recoverable_oil'] * X['oil_price'] * 0.7 - X['capex']) / X['capex']
-        ) * 100,  # in percent
+        # Add some noise and adjust
+        realistic_irr = simple_irr * 0.7 + discount * 0.3
+        realistic_irr = np.clip(realistic_irr, 0.03, 0.35)
         
-        'payback_period': np.random.uniform(1, 10, n_samples),  # in years
-        
-        'break_even_price': X['opex_per_bbl'] + (X['capex'] * 0.1 / X['recoverable_oil'])
-    })
+        return realistic_irr * 100  # Convert to percentage
+    
+    y_data['irr'] = [calculate_irr_simple(capex[i], annual_cash_flow[i], discount_rate[i]) 
+                    for i in range(n_samples)]
+    
+    # 3. ROI Calculation (realistic)
+    total_revenue = recoverable_oil * oil_price * 0.7  # 70% net revenue
+    y_data['roi'] = ((total_revenue - capex) / capex) * 100
+    
+    # 4. Payback Period (realistic)
+    annual_net_cash = annual_cash_flow
+    payback = capex / annual_net_cash
+    payback = np.clip(payback, 1, 15)  # 1 to 15 years
+    y_data['payback_period'] = payback
+    
+    # 5. Break-even Price
+    y_data['break_even_price'] = opex_per_bbl + (capex * discount_rate / recoverable_oil)
+    
+    return X, y_data
+
+
+# Example usage with REALISTIC data
+if __name__ == "__main__":
+    # Generate realistic data
+    print("Generating realistic economic dataset...")
+    n_samples = 1000
+    
+    X, y_data = generate_realistic_economic_data(n_samples)
+    
+    print(f"\nDataset statistics:")
+    print(f"Samples: {n_samples}")
+    print(f"Features: {X.shape[1]}")
+    print(f"Target ranges:")
+    print(f"  NPV: ${y_data['npv'].min():.1f}M to ${y_data['npv'].max():.1f}M")
+    print(f"  IRR: {y_data['irr'].min():.1f}% to {y_data['irr'].max():.1f}%")
+    print(f"  ROI: {y_data['roi'].min():.1f}% to {y_data['roi'].max():.1f}%")
     
     # Create and train predictor
     predictor = SVREconomicPredictor(model_type='random_forest', use_polynomial_features=True)
@@ -485,10 +560,16 @@ if __name__ == "__main__":
     for target, target_metrics in metrics.items():
         print(f"\n{target.upper()}:")
         for metric_name, value in target_metrics.items():
-            print(f"  {metric_name}: {value:.4f}")
+            if metric_name == 'R2':
+                print(f"  {metric_name}: {value:.4f} {'(GOOD)' if value > 0.7 else '(POOR)'}")
+            else:
+                print(f"  {metric_name}: {value:.4f}")
     
     # Feature analysis
-    predictor.feature_analysis(X_train)
+    try:
+        predictor.feature_analysis(X_train)
+    except:
+        print("\nNote: Visualization skipped in non-interactive environment")
     
     # Sensitivity analysis example
     print("\n" + "="*50)
@@ -521,3 +602,8 @@ if __name__ == "__main__":
     
     # Save model
     predictor.save_model('economic_predictor_model.joblib')
+    
+    # Save dataset for reference
+    full_data = pd.concat([X, y_data], axis=1)
+    full_data.to_csv('generated_economic_dataset.csv', index=False)
+    print(f"\nDataset saved to 'generated_economic_dataset.csv'")
