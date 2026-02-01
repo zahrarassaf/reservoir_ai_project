@@ -22,7 +22,7 @@ The primary objective is not field deployment, but methodological development: c
 
 ---
 
-## 🧱 System Components
+## 🫆 System Components
 
 ### 1. Physics-Based Reservoir Simulation
 
