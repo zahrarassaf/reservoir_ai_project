@@ -59,7 +59,7 @@ The primary objective is not field deployment, but methodological development: c
 
 ---
 
-## 📊 Representative Results (Benchmark Case)
+##  Representative Results (Benchmark Case)
 
 These results demonstrate the analytical capability of the framework rather than guaranteed field performance:
 
@@ -74,7 +74,7 @@ Model performance was consistent with SPE9 benchmark expectations, with surrogat
 
 ---
 
-## 🏗️ Repository Structure
+##  Repository Structure
 
 ```
 Reservoir AI Project/
@@ -83,7 +83,6 @@ Reservoir AI Project/
 │   ├── physics/                # Physics-based simulation
 │   └── utils/                  # Utilities
 ├── data/                       # SPE9 benchmark data
-├── notebooks/                  # Jupyter analysis notebooks
 ├── results/                    # Generated outputs and reports
 ├── main.py                     # Main execution script
 ├── digital_twin.py             # Digital twin implementation
