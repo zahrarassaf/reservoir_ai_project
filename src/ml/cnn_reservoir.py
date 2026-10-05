@@ -1,399 +1,1030 @@
 """
-CNN Reservoir Property Predictor - ULTIMATE SIMPLE VERSION
-No save/load issues, just training and prediction
+cnn_reservoir.py
+SPE9 CNN baseline for spatial permeability reconstruction.
 """
 
+from __future__ import annotations
+
+import copy
+import random
+import re
+from pathlib import Path
+from typing import Dict, List, Sequence, Tuple
+
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
-import matplotlib.pyplot as plt
-import warnings
-import re
-from pathlib import Path
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
-warnings.filterwarnings('ignore')
+from torch.utils.data import DataLoader, Dataset
 
-print("="*60)
-print("ULTIMATE CNN FOR SPE9 - SIMPLE & WORKING")
-print("="*60)
 
-# ==================== DATA LOADING ====================
-print("\n[1/5] Loading SPE9 data...")
-data_dir = Path("data")
-perm_file = data_dir / "PERMVALUES.DATA"
+# ============================================================
+# CONFIG
+# ============================================================
 
-if perm_file.exists():
-    with open(perm_file, 'r') as f:
-        content = f.read()
-    numbers = re.findall(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', content)
-    permeability = np.array([float(n) for n in numbers[:9000]])
-    permeability_3d = permeability.reshape(24, 25, 15)
-    print(f"   ✓ Permeability loaded: {permeability_3d.shape}")
-else:
-    print("   ⚠ Using synthetic permeability")
-    permeability_3d = np.random.lognormal(mean=np.log(100), sigma=1.0, size=(24, 25, 15))
+SEED = 42
+N_SEEDS = 5
 
-# Create realistic properties
-print("   Creating correlated properties...")
-log_perm = np.log(permeability_3d + 1)
+EPOCHS = 150
+PATIENCE = 20
+BATCH_SIZE = 16
+LEARNING_RATE = 5e-4
+WEIGHT_DECAY = 1e-3
 
-porosity_3d = 0.15 + 0.1 * (log_perm - np.mean(log_perm)) / np.std(log_perm)
-porosity_3d = np.clip(porosity_3d + np.random.normal(0, 0.02, permeability_3d.shape), 0.1, 0.35)
+GRID_SHAPE_KJI = (15, 25, 24)
+PATCH_KJ = 5
+HALF_PATCH = PATCH_KJ // 2
 
-saturation_3d = 0.8 - 0.05 * (log_perm - np.mean(log_perm)) / np.std(log_perm)
-saturation_3d = np.clip(saturation_3d + np.random.normal(0, 0.02, permeability_3d.shape), 0.7, 0.9)
+# Patch supports along J:
+#   center range = [HALF_PATCH, J_SIZE - HALF_PATCH - 1] = [2, 22]
+#   support of center c = [c - 2, c + 2] ⊂ [0, 24]
+#
+# Split (pairwise disjoint supports):
+#   train support = 0..11
+#   val support   = 12..18
+#   test support  = 19..24
+TRAIN_J = range(2, 10)     # centers 2..9
+VAL_J = range(14, 17)      # centers 14..16
+TEST_J = range(21, 23)     # centers 21..22
 
-# Create 3-channel grid input
-grid_data = np.stack([
-    np.log10(permeability_3d + 1),  # Channel 1
-    porosity_3d,                    # Channel 2
-    saturation_3d                   # Channel 3
-], axis=0)  # Shape: (3, 24, 25, 15)
+DATA_DIR = Path("data")
+PERM_FILE = DATA_DIR / "PERMVALUES.DATA"
+SPE9_FILE = DATA_DIR / "SPE9.DATA"
 
-# Normalize each channel
-for i in range(3):
-    mean = grid_data[i].mean()
-    std = grid_data[i].std()
-    grid_data[i] = (grid_data[i] - mean) / (std + 1e-8)
+OUTPUT_DIR = Path("outputs")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# 2D target properties
-properties_2d = {
-    'permeability': np.mean(permeability_3d, axis=0),
-    'porosity': np.mean(porosity_3d, axis=0),
-    'saturation': np.mean(saturation_3d, axis=0)
-}
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-print(f"\n   Grid data: {grid_data.shape}")
-print(f"   Target properties: {properties_2d['permeability'].shape}")
 
-# ==================== DATA SCALING ====================
-print("\n[2/5] Scaling data...")
+# ============================================================
+# REPRODUCIBILITY
+# ============================================================
 
-# Scale targets
-scalers = {}
-scaled_targets = np.zeros((properties_2d['permeability'].size, 3))
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
 
-for i, name in enumerate(['permeability', 'porosity', 'saturation']):
-    data = properties_2d[name].flatten()
-    scaler = StandardScaler()
-    scaled = scaler.fit_transform(data.reshape(-1, 1)).flatten()
-    scaled_targets[:, i] = scaled
-    scalers[name] = scaler
-    
-    print(f"   ✓ {name}: mean={data.mean():.4f} -> scaled mean={scaled.mean():.4f}")
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
-# Reshape back to 2D for dataset
-scaled_properties = {
-    'permeability': scaled_targets[:, 0].reshape(properties_2d['permeability'].shape),
-    'porosity': scaled_targets[:, 1].reshape(properties_2d['permeability'].shape),
-    'saturation': scaled_targets[:, 2].reshape(properties_2d['permeability'].shape)
-}
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
-# ==================== DATASET ====================
-print("\n[3/5] Creating dataset...")
 
-class QuickDataset(Dataset):
-    def __init__(self, grid_data, properties):
-        self.grid_data = grid_data  # (3, 24, 25, 15)
-        self.properties = properties  # dict of (25, 15) arrays
-        
-        # Create all valid 5x5 patches
-        self.samples = []
-        
-        for y in range(2, 23):  # Leave 2 cells margin
-            for z in range(2, 13):  # Leave 2 cells margin
-                # Extract patch
-                patch = grid_data[:, :, y-2:y+3, z-2:z+3]  # 5x5 patch
-                
-                # Get targets
-                targets = np.array([
-                    properties['permeability'][y, z],
-                    properties['porosity'][y, z],
-                    properties['saturation'][y, z]
-                ])
-                
-                self.samples.append((patch, targets))
-        
-        print(f"   Created {len(self.samples)} samples")
-    
-    def __len__(self):
+# ============================================================
+# ECLIPSE-DATA PARSING
+# ============================================================
+
+def strip_comments(text: str) -> str:
+    return re.sub(r"--[^\n\r]*", "", text)
+
+
+def extract_keyword_block(text: str, keyword: str) -> str:
+    clean = strip_comments(text)
+
+    match = re.search(
+        rf"\b{re.escape(keyword)}\b(.*?)/",
+        clean,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    if match is None:
+        raise ValueError(f"Keyword '{keyword}' was not found.")
+
+    return match.group(1)
+
+
+def expand_eclipse_values(block: str) -> np.ndarray:
+    tokens = block.replace("\n", " ").replace("\r", " ").split()
+
+    values: List[float] = []
+
+    for token in tokens:
+        token = token.strip().rstrip(",")
+
+        if not token:
+            continue
+
+        if "*" in token:
+            parts = token.split("*")
+
+            if len(parts) != 2:
+                raise ValueError(f"Unsupported Eclipse token: {token}")
+
+            count_text, value_text = parts
+
+            if value_text == "":
+                raise ValueError(
+                    f"Unspecified Eclipse value is not supported: {token}"
+                )
+
+            count = int(count_text)
+            value = float(value_text)
+
+            if count < 0:
+                raise ValueError(f"Negative repeat count: {token}")
+
+            values.extend([value] * count)
+        else:
+            values.append(float(token))
+
+    return np.asarray(values, dtype=np.float32)
+
+
+def load_spe9_permx(path: Path) -> np.ndarray:
+    if not path.exists():
+        raise FileNotFoundError(f"Missing permeability file: {path}")
+
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    block = extract_keyword_block(text, "PERMX")
+    values = expand_eclipse_values(block)
+
+    expected = int(np.prod(GRID_SHAPE_KJI))
+
+    if values.size != expected:
+        raise ValueError(
+            f"PERMX contains {values.size} values; expected {expected} "
+            f"for grid {GRID_SHAPE_KJI}."
+        )
+
+    if not np.all(np.isfinite(values)):
+        raise ValueError("PERMX contains NaN or infinite values.")
+
+    if np.any(values <= 0):
+        raise ValueError("PERMX must be strictly positive for log transform.")
+
+    return values.reshape(GRID_SHAPE_KJI)
+
+
+def load_spe9_poro(path: Path) -> np.ndarray:
+    if not path.exists():
+        raise FileNotFoundError(f"Missing SPE9 data file: {path}")
+
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    block = extract_keyword_block(text, "PORO")
+    values = expand_eclipse_values(block)
+
+    expected = int(np.prod(GRID_SHAPE_KJI))
+
+    if values.size != expected:
+        raise ValueError(
+            f"PORO contains {values.size} values; expected {expected}."
+        )
+
+    if not np.all(np.isfinite(values)):
+        raise ValueError("PORO contains NaN or infinite values.")
+
+    if np.any((values <= 0) | (values >= 1)):
+        raise ValueError("PORO contains values outside the physical range (0, 1).")
+
+    return values.reshape(GRID_SHAPE_KJI)
+
+
+def report_spe9_grid(permx: np.ndarray, poro: np.ndarray) -> None:
+    if permx.shape != GRID_SHAPE_KJI:
+        raise RuntimeError(f"Unexpected PERMX shape: {permx.shape}")
+
+    if poro.shape != GRID_SHAPE_KJI:
+        raise RuntimeError(f"Unexpected PORO shape: {poro.shape}")
+
+    poro_layer_const = all(
+        np.allclose(poro[k], poro[k].flat[0], atol=1e-6)
+        for k in range(poro.shape[0])
+    )
+
+    perm_layer_means = permx.mean(axis=(1, 2))
+
+    print("SPE9 grid checks:")
+    print(f"  PORO constant within each K layer: {poro_layer_const}")
+    print(
+        f"  PERMX layer-mean range: "
+        f"[{perm_layer_means.min():.3f}, {perm_layer_means.max():.3f}]"
+    )
+    print(
+        "  Cell ordering of PERMX and PORO follows the SPE9 file "
+        "specification; it is not verified programmatically."
+    )
+
+
+# ============================================================
+# DATA PREPARATION
+# ============================================================
+
+def prepare_grid() -> Tuple[np.ndarray, np.ndarray]:
+    permx = load_spe9_permx(PERM_FILE)
+    poro = load_spe9_poro(SPE9_FILE)
+
+    report_spe9_grid(permx, poro)
+
+    print(f"PERMX shape (K,J,I): {permx.shape}")
+    print(f"PORO  shape (K,J,I): {poro.shape}")
+
+    return permx.astype(np.float32), poro.astype(np.float32)
+
+
+# ============================================================
+# DATASET
+# ============================================================
+
+class ReservoirPatchDataset(Dataset):
+    def __init__(
+        self,
+        permx_kji: np.ndarray,
+        poro_kji: np.ndarray,
+        half_patch: int = HALF_PATCH,
+    ) -> None:
+        if permx_kji.shape != GRID_SHAPE_KJI:
+            raise ValueError(
+                f"Unexpected PERMX shape: {permx_kji.shape}; "
+                f"expected {GRID_SHAPE_KJI}."
+            )
+
+        if poro_kji.shape != GRID_SHAPE_KJI:
+            raise ValueError(
+                f"Unexpected PORO shape: {poro_kji.shape}; "
+                f"expected {GRID_SHAPE_KJI}."
+            )
+
+        self.permx = permx_kji
+        self.poro = poro_kji
+        self.half_patch = half_patch
+
+        self.samples: List[Tuple[int, int]] = []
+
+        k_size, j_size, _ = GRID_SHAPE_KJI
+
+        for k in range(half_patch, k_size - half_patch):
+            for j in range(half_patch, j_size - half_patch):
+                self.samples.append((k, j))
+
+    def __len__(self) -> int:
         return len(self.samples)
-    
-    def __getitem__(self, idx):
-        patch, targets = self.samples[idx]
-        return torch.FloatTensor(patch), torch.FloatTensor(targets)
 
-# Create dataset
-dataset = QuickDataset(grid_data, scaled_properties)
+    def __getitem__(
+        self, index: int
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self._build(index, augment=False)
 
-# Split
-indices = list(range(len(dataset)))
-np.random.shuffle(indices)
-split = int(0.8 * len(indices))
+    def _build(
+        self, index: int, augment: bool
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        k, j = self.samples[index]
 
-train_loader = DataLoader(
-    [dataset[i] for i in indices[:split]],
-    batch_size=16,
-    shuffle=True
-)
+        k0 = k - self.half_patch
+        k1 = k + self.half_patch + 1
+        j0 = j - self.half_patch
+        j1 = j + self.half_patch + 1
 
-val_loader = DataLoader(
-    [dataset[i] for i in indices[split:]],
-    batch_size=16,
-    shuffle=False
-)
+        if j0 < 0 or j1 > GRID_SHAPE_KJI[1]:
+            raise RuntimeError(
+                f"Patch J range [{j0}, {j1}) out of bounds for center J={j}."
+            )
 
-print(f"   Train: {split}, Validation: {len(indices)-split}")
+        if k0 < 0 or k1 > GRID_SHAPE_KJI[0]:
+            raise RuntimeError(
+                f"Patch K range [{k0}, {k1}) out of bounds for center K={k}."
+            )
 
-# ==================== MODEL ====================
-print("\n[4/5] Creating model...")
+        perm_patch = self.permx[k0:k1, j0:j1, :].transpose(2, 1, 0)
+        poro_patch = self.poro[k0:k1, j0:j1, :].transpose(2, 1, 0)
 
-class QuickCNN(nn.Module):
-    def __init__(self):
+        log_perm_patch = np.log10(perm_patch).astype(np.float32)
+
+        center_y = self.half_patch
+        center_z = self.half_patch
+
+        observation_mask = np.ones_like(log_perm_patch, dtype=np.float32)
+        observation_mask[:, center_y, center_z] = 0.0
+
+        masked_log_perm = log_perm_patch.copy()
+        masked_log_perm[:, center_y, center_z] = 0.0
+
+        patch = np.stack(
+            [
+                masked_log_perm,
+                poro_patch,
+                observation_mask,
+            ],
+            axis=0,
+        ).astype(np.float32)
+
+        target_value = np.log10(self.permx[k, j, :].mean())
+
+        if augment and random.random() > 0.5:
+            patch = np.flip(patch, axis=2).copy()
+
+        target = np.array([float(target_value)], dtype=np.float32)
+
+        return torch.from_numpy(patch), torch.from_numpy(target)
+
+
+# ============================================================
+# SPATIAL BLOCK SPLIT
+# ============================================================
+
+def make_spatial_indices(
+    dataset: ReservoirPatchDataset,
+) -> Tuple[List[int], List[int], List[int]]:
+    coord_to_index = {coord: i for i, coord in enumerate(dataset.samples)}
+
+    def collect(js: Sequence[int]) -> List[int]:
+        result = []
+
+        for k in range(HALF_PATCH, GRID_SHAPE_KJI[0] - HALF_PATCH):
+            for j in js:
+                coord = (k, j)
+
+                if coord in coord_to_index:
+                    result.append(coord_to_index[coord])
+
+        return result
+
+    train_idx = collect(TRAIN_J)
+    val_idx = collect(VAL_J)
+    test_idx = collect(TEST_J)
+
+    if not train_idx or not val_idx or not test_idx:
+        raise RuntimeError("One of the spatial splits is empty.")
+
+    def j_support(coords) -> set:
+        cols = set()
+        for _, j in coords:
+            cols.update(range(j - HALF_PATCH, j + HALF_PATCH + 1))
+        return cols
+
+    train_coords = {dataset.samples[i] for i in train_idx}
+    val_coords = {dataset.samples[i] for i in val_idx}
+    test_coords = {dataset.samples[i] for i in test_idx}
+
+    train_j = j_support(train_coords)
+    val_j = j_support(val_coords)
+    test_j = j_support(test_coords)
+
+    if train_j & val_j:
+        raise RuntimeError(
+            f"Train/val J-column leakage: {sorted(train_j & val_j)}"
+        )
+    if train_j & test_j:
+        raise RuntimeError(
+            f"Train/test J-column leakage: {sorted(train_j & test_j)}"
+        )
+    if val_j & test_j:
+        raise RuntimeError(
+            f"Val/test J-column leakage: {sorted(val_j & test_j)}"
+        )
+
+    print(f"Train samples: {len(train_idx)}  (J centers = {list(TRAIN_J)})")
+    print(f"Val samples:   {len(val_idx)}  (J centers = {list(VAL_J)})")
+    print(f"Test samples:  {len(test_idx)}  (J centers = {list(TEST_J)})")
+    print(f"Train J-columns: {sorted(train_j)}")
+    print(f"Val   J-columns: {sorted(val_j)}")
+    print(f"Test  J-columns: {sorted(test_j)}")
+
+    return train_idx, val_idx, test_idx
+
+
+# ============================================================
+# NORMALIZATION
+# ============================================================
+
+def normalize_input(
+    dataset: ReservoirPatchDataset,
+    train_indices: Sequence[int],
+) -> Tuple[float, float, float, float]:
+    train_j_centers = sorted({dataset.samples[i][1] for i in train_indices})
+
+    j_lo = min(train_j_centers) - HALF_PATCH
+    j_hi = max(train_j_centers) + HALF_PATCH + 1
+
+    perm_block = dataset.permx[:, j_lo:j_hi, :]
+    poro_block = dataset.poro[:, j_lo:j_hi, :]
+
+    log_perm_block = np.log10(perm_block)
+
+    perm_mean = float(log_perm_block.mean())
+    perm_std = float(log_perm_block.std())
+    poro_mean = float(poro_block.mean())
+    poro_std = float(poro_block.std())
+
+    if perm_std < 1e-8 or poro_std < 1e-8:
+        raise ValueError("Training input has near-zero variance.")
+
+    dataset.input_stats = (perm_mean, perm_std, poro_mean, poro_std)
+
+    return dataset.input_stats
+
+
+def normalize_target(
+    dataset: ReservoirPatchDataset,
+    train_indices: Sequence[int],
+) -> StandardScaler:
+    train_targets = np.asarray(
+        [
+            np.log10(dataset.permx[k, j, :].mean())
+            for k, j in (dataset.samples[i] for i in train_indices)
+        ],
+        dtype=np.float32,
+    ).reshape(-1, 1)
+
+    scaler = StandardScaler()
+    scaler.fit(train_targets)
+
+    dataset.target_scaler = scaler
+
+    return scaler
+
+
+# ============================================================
+# NORMALIZED DATASET
+# ============================================================
+
+class NormalizedReservoirDataset(Dataset):
+    def __init__(
+        self,
+        base_dataset: ReservoirPatchDataset,
+        indices: Sequence[int],
+        augment: bool = False,
+    ) -> None:
+        self.base_dataset = base_dataset
+        self.indices = list(indices)
+        self.augment = augment
+
+        if not hasattr(base_dataset, "input_stats"):
+            raise RuntimeError("Input normalization statistics are missing.")
+
+        if not hasattr(base_dataset, "target_scaler"):
+            raise RuntimeError("Target scaler is missing.")
+
+    def __len__(self) -> int:
+        return len(self.indices)
+
+    def __getitem__(self, idx: int):
+        original_idx = self.indices[idx]
+
+        patch, target = self.base_dataset._build(
+            original_idx, augment=self.augment
+        )
+
+        perm_mean, perm_std, poro_mean, poro_std = self.base_dataset.input_stats
+
+        patch = patch.numpy().copy()
+
+        patch[0] = (patch[0] - perm_mean) / perm_std
+        patch[1] = (patch[1] - poro_mean) / poro_std
+
+        target_np = self.base_dataset.target_scaler.transform(
+            target.numpy().reshape(1, -1)
+        )[0].astype(np.float32)
+
+        return (
+            torch.from_numpy(patch.astype(np.float32)),
+            torch.from_numpy(target_np),
+        )
+
+
+# ============================================================
+# MODEL
+# ============================================================
+
+class CNNReservoir(nn.Module):
+    def __init__(self, i_pool: int = 2) -> None:
         super().__init__()
-        
-        # Feature extractor
+
+        self.i_pool = i_pool
+
         self.features = nn.Sequential(
-            nn.Conv3d(3, 16, 3, padding=1),
-            nn.ReLU(),
-            nn.Conv3d(16, 16, 3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool3d(2),
-            
-            nn.Conv3d(16, 32, 3, padding=1),
-            nn.ReLU(),
-            nn.Conv3d(32, 32, 3, padding=1),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool3d((3, 1, 1))
+            nn.Conv3d(3, 8, kernel_size=3, padding=1),
+            nn.GroupNorm(2, 8),
+            nn.ReLU(inplace=True),
+
+            nn.Conv3d(8, 16, kernel_size=3, padding=1),
+            nn.GroupNorm(4, 16),
+            nn.ReLU(inplace=True),
+
+            nn.MaxPool3d(kernel_size=(2, 1, 1), stride=(2, 1, 1)),
+
+            nn.Conv3d(16, 16, kernel_size=3, padding=1),
+            nn.GroupNorm(4, 16),
+            nn.ReLU(inplace=True),
+
+            nn.AdaptiveAvgPool3d((i_pool, PATCH_KJ, PATCH_KJ)),
         )
-        
-        # Regressor
+
         self.regressor = nn.Sequential(
-            nn.Linear(32 * 3 * 1 * 1, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 3)
+            nn.Flatten(),
+            nn.Linear(16 * i_pool * PATCH_KJ * PATCH_KJ, 32),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.2),
+            nn.Linear(32, 1),
         )
-    
-    def forward(self, x):
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.features(x)
-        x = x.view(x.size(0), -1)
-        x = self.regressor(x)
-        return x
+        return self.regressor(x)
 
-# Initialize
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = QuickCNN().to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-criterion = nn.MSELoss()
 
-print(f"   Using device: {device}")
-print(f"   Model parameters: {sum(p.numel() for p in model.parameters()):,}")
+# ============================================================
+# TRAIN / EVALUATE
+# ============================================================
 
-# ==================== TRAINING ====================
-print("\n[5/5] Training model...")
-print("-" * 50)
+CRITERION = nn.HuberLoss(delta=1.0)
 
-train_losses = []
-val_losses = []
-best_model_state = None
-best_val_loss = float('inf')
 
-for epoch in range(30):
-    # Train
-    model.train()
-    train_loss = 0.0
-    
-    for patches, targets in train_loader:
-        patches, targets = patches.to(device), targets.to(device)
-        
-        optimizer.zero_grad()
-        outputs = model(patches)
-        loss = criterion(outputs, targets)
-        loss.backward()
-        optimizer.step()
-        
-        train_loss += loss.item()
-    
-    # Validate
+def evaluate(
+    model: nn.Module,
+    loader: DataLoader,
+    target_scaler: StandardScaler,
+) -> Dict[str, float]:
     model.eval()
-    val_loss = 0.0
-    
+
+    losses: List[float] = []
+    predictions: List[np.ndarray] = []
+    targets: List[np.ndarray] = []
+
     with torch.no_grad():
-        for patches, targets in val_loader:
-            patches, targets = patches.to(device), targets.to(device)
-            outputs = model(patches)
-            val_loss += criterion(outputs, targets).item()
-    
-    avg_train = train_loss / len(train_loader)
-    avg_val = val_loss / len(val_loader)
-    
-    train_losses.append(avg_train)
-    val_losses.append(avg_val)
-    
-    # Save best model state
-    if avg_val < best_val_loss:
-        best_val_loss = avg_val
-        best_model_state = model.state_dict().copy()
-    
-    if (epoch + 1) % 5 == 0:
-        print(f"   Epoch {epoch+1:3d}/30 | Train: {avg_train:.6f} | Val: {avg_val:.6f}")
+        for x, y in loader:
+            x = x.to(DEVICE)
+            y = y.to(DEVICE)
 
-# Load best model
-model.load_state_dict(best_model_state)
-print(f"\n   Best validation loss: {best_val_loss:.6f}")
+            pred = model(x)
 
-# ==================== PREDICTION ====================
-print("\n" + "="*60)
-print("MAKING PREDICTIONS")
-print("="*60)
+            loss = CRITERION(pred, y)
+            losses.append(float(loss.item()))
 
-model.eval()
+            predictions.append(pred.cpu().numpy())
+            targets.append(y.cpu().numpy())
 
-# Make predictions for all grid cells
-all_predictions_scaled = []
-all_targets_scaled = []
+    pred_scaled = np.concatenate(predictions, axis=0)
+    true_scaled = np.concatenate(targets, axis=0)
 
-with torch.no_grad():
-    for patches, targets in train_loader:
-        patches = patches.to(device)
-        outputs = model(patches)
-        all_predictions_scaled.append(outputs.cpu().numpy())
-        all_targets_scaled.append(targets.numpy())
+    pred_log = target_scaler.inverse_transform(pred_scaled).ravel()
+    true_log = target_scaler.inverse_transform(true_scaled).ravel()
 
-# Combine all predictions
-predictions_scaled = np.vstack(all_predictions_scaled)
-targets_scaled = np.vstack(all_targets_scaled)
+    pred_perm = 10.0 ** pred_log
+    true_perm = 10.0 ** true_log
 
-# Inverse transform predictions
-predictions_original = np.zeros_like(predictions_scaled)
-for i, name in enumerate(['permeability', 'porosity', 'saturation']):
-    predictions_original[:, i] = scalers[name].inverse_transform(
-        predictions_scaled[:, i].reshape(-1, 1)
-    ).flatten()
+    metrics = {
+        "loss": float(np.mean(losses)),
+        "log_mae": float(mean_absolute_error(true_log, pred_log)),
+        "log_rmse": float(np.sqrt(mean_squared_error(true_log, pred_log))),
+        "log_r2": float(r2_score(true_log, pred_log)),
+        "perm_mae": float(mean_absolute_error(true_perm, pred_perm)),
+        "perm_rmse": float(np.sqrt(mean_squared_error(true_perm, pred_perm))),
+        "perm_r2": float(r2_score(true_perm, pred_perm)),
+    }
 
-# Get original targets
-targets_original = np.zeros_like(targets_scaled)
-for i, name in enumerate(['permeability', 'porosity', 'saturation']):
-    targets_original[:, i] = scalers[name].inverse_transform(
-        targets_scaled[:, i].reshape(-1, 1)
-    ).flatten()
+    metrics["_pred_log"] = pred_log
+    metrics["_true_log"] = true_log
+    metrics["_pred_perm"] = pred_perm
+    metrics["_true_perm"] = true_perm
 
-# ==================== EVALUATION ====================
-print("\nEVALUATION RESULTS:")
-print("-" * 40)
+    return metrics
 
-from sklearn.metrics import mean_absolute_error, r2_score
 
-property_names = ['permeability', 'porosity', 'saturation']
-for i, name in enumerate(property_names):
-    pred = predictions_original[:, i]
-    true = targets_original[:, i]
-    
-    mae = mean_absolute_error(true, pred)
-    r2 = r2_score(true, pred)
-    
-    print(f"\n{name.upper():<15}")
-    print(f"  MAE:       {mae:.4f}")
-    print(f"  R²:        {r2:.4f}")
-    print(f"  True mean: {true.mean():.4f}")
-    print(f"  Pred mean: {pred.mean():.4f}")
-    
-    if true.mean() > 0:
-        rel_error = abs(true.mean() - pred.mean()) / true.mean() * 100
-        print(f"  Error:     {rel_error:.1f}%")
+def train_model(
+    model: nn.Module,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    target_scaler: StandardScaler,
+) -> Tuple[nn.Module, Dict[str, List[float]]]:
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=LEARNING_RATE,
+        weight_decay=WEIGHT_DECAY,
+    )
 
-# ==================== VISUALIZATION ====================
-print("\n" + "="*60)
-print("CREATING VISUALIZATIONS")
-print("="*60)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        factor=0.5,
+        patience=5,
+    )
 
-# 1. Training history
-plt.figure(figsize=(10, 5))
-plt.plot(train_losses, label='Training Loss', linewidth=2)
-plt.plot(val_losses, label='Validation Loss', linewidth=2)
-plt.xlabel('Epoch')
-plt.ylabel('Loss (MSE)')
-plt.title('CNN Training History')
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.savefig('quick_cnn_training.png', dpi=150)
-print("✓ Training history saved: quick_cnn_training.png")
+    history: Dict[str, List[float]] = {
+        "train_loss": [],
+        "val_loss": [],
+        "val_log_rmse": [],
+        "val_log_r2": [],
+        "val_perm_rmse": [],
+        "val_perm_r2": [],
+    }
 
-# 2. Scatter plots
-fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    best_val_loss = float("inf")
+    best_state = None
+    epochs_without_improvement = 0
 
-for i, name in enumerate(property_names):
-    pred = predictions_original[:, i]
-    true = targets_original[:, i]
-    
-    axes[i].scatter(true, pred, alpha=0.6, s=20)
-    
-    # Perfect prediction line
-    min_val = min(true.min(), pred.min())
-    max_val = max(true.max(), pred.max())
-    axes[i].plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=1)
-    
-    # Add R²
-    r2 = r2_score(true, pred)
-    axes[i].text(0.05, 0.95, f'R² = {r2:.3f}', 
-                transform=axes[i].transAxes,
-                fontsize=10, verticalalignment='top',
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-    
-    axes[i].set_xlabel('True Value')
-    axes[i].set_ylabel('Predicted Value')
-    axes[i].set_title(f'{name.capitalize()} Prediction')
-    axes[i].grid(True, alpha=0.3)
+    model.to(DEVICE)
 
-plt.suptitle('CNN Predictions vs True Values', fontsize=14)
-plt.tight_layout()
-plt.savefig('quick_cnn_predictions.png', dpi=300)
-print("✓ Predictions scatter plot saved: quick_cnn_predictions.png")
+    for epoch in range(1, EPOCHS + 1):
+        model.train()
 
-# 3. Error distribution
-fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        train_losses: List[float] = []
 
-for i, name in enumerate(property_names):
-    pred = predictions_original[:, i]
-    true = targets_original[:, i]
-    errors = pred - true
-    
-    axes[i].hist(errors, bins=30, alpha=0.7, edgecolor='black')
-    axes[i].axvline(x=0, color='red', linestyle='--', linewidth=1)
-    axes[i].set_xlabel('Prediction Error')
-    axes[i].set_ylabel('Frequency')
-    axes[i].set_title(f'{name.capitalize()} Error Distribution')
-    axes[i].grid(True, alpha=0.3)
-    
-    # Add error statistics
-    mean_error = errors.mean()
-    std_error = errors.std()
-    axes[i].text(0.05, 0.95, f'Mean: {mean_error:.4f}\nStd: {std_error:.4f}', 
-                transform=axes[i].transAxes,
-                fontsize=9, verticalalignment='top',
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        for x, y in train_loader:
+            x = x.to(DEVICE)
+            y = y.to(DEVICE)
 
-plt.suptitle('Prediction Error Distributions', fontsize=14)
-plt.tight_layout()
-plt.savefig('quick_cnn_errors.png', dpi=300)
-print("✓ Error distributions saved: quick_cnn_errors.png")
+            optimizer.zero_grad(set_to_none=True)
 
-plt.show()
+            pred = model(x)
+            loss = CRITERION(pred, y)
 
-print("\n" + "="*60)
-print("SUMMARY")
-print("="*60)
-print("✓ CNN model trained successfully")
-print("✓ Used REAL SPE9 permeability data")
-print("✓ 3-channel input (log-perm, porosity, saturation)")
-print("✓ Training completed with early stopping")
-print("✓ Visualizations created:")
-print("  - quick_cnn_training.png")
-print("  - quick_cnn_predictions.png")
-print("  - quick_cnn_errors.png")
-print("="*60)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+            optimizer.step()
+
+            train_losses.append(float(loss.item()))
+
+        train_loss = float(np.mean(train_losses))
+
+        val_metrics = evaluate(model, val_loader, target_scaler)
+        val_loss = val_metrics["loss"]
+
+        scheduler.step(val_loss)
+
+        history["train_loss"].append(train_loss)
+        history["val_loss"].append(val_loss)
+        history["val_log_rmse"].append(val_metrics["log_rmse"])
+        history["val_log_r2"].append(val_metrics["log_r2"])
+        history["val_perm_rmse"].append(val_metrics["perm_rmse"])
+        history["val_perm_r2"].append(val_metrics["perm_r2"])
+
+        current_lr = optimizer.param_groups[0]["lr"]
+
+        print(
+            f"Epoch {epoch:03d} | "
+            f"train_loss={train_loss:.5f} | "
+            f"val_loss={val_loss:.5f} | "
+            f"val_log_R2={val_metrics['log_r2']:.4f} | "
+            f"val_perm_R2={val_metrics['perm_r2']:.4f} | "
+            f"val_perm_RMSE={val_metrics['perm_rmse']:.4f} | "
+            f"lr={current_lr:.2e}"
+        )
+
+        if val_loss < best_val_loss - 1e-7:
+            best_val_loss = val_loss
+            best_state = copy.deepcopy(model.state_dict())
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+
+        if epochs_without_improvement >= PATIENCE:
+            print(f"Early stopping at epoch {epoch}.")
+            break
+
+    if best_state is None:
+        raise RuntimeError("No best model state was recorded.")
+
+    model.load_state_dict(best_state)
+
+    return model, history
+
+
+# ============================================================
+# BASELINES
+# ============================================================
+
+def baseline_train_mean(
+    train_indices: Sequence[int],
+    test_indices: Sequence[int],
+    dataset: ReservoirPatchDataset,
+) -> Dict[str, float]:
+    train_targets = np.asarray(
+        [
+            np.log10(dataset.permx[k, j, :].mean())
+            for k, j in (dataset.samples[i] for i in train_indices)
+        ],
+        dtype=np.float64,
+    )
+
+    test_targets = np.asarray(
+        [
+            np.log10(dataset.permx[k, j, :].mean())
+            for k, j in (dataset.samples[i] for i in test_indices)
+        ],
+        dtype=np.float64,
+    )
+
+    prediction = np.full_like(test_targets, train_targets.mean())
+
+    pred_perm = 10.0 ** prediction
+    true_perm = 10.0 ** test_targets
+
+    return {
+        "log_mae": float(mean_absolute_error(test_targets, prediction)),
+        "log_rmse": float(np.sqrt(mean_squared_error(test_targets, prediction))),
+        "log_r2": float(r2_score(test_targets, prediction)),
+        "perm_mae": float(mean_absolute_error(true_perm, pred_perm)),
+        "perm_rmse": float(np.sqrt(mean_squared_error(true_perm, pred_perm))),
+        "perm_r2": float(r2_score(true_perm, pred_perm)),
+    }
+
+
+def baseline_same_k_train_mean(
+    train_indices: Sequence[int],
+    test_indices: Sequence[int],
+    dataset: ReservoirPatchDataset,
+) -> Dict[str, float]:
+    train_by_k: Dict[int, List[float]] = {}
+
+    for i in train_indices:
+        k, j = dataset.samples[i]
+        train_by_k.setdefault(k, []).append(
+            float(np.log10(dataset.permx[k, j, :].mean()))
+        )
+
+    global_mean = float(
+        np.mean([v for vs in train_by_k.values() for v in vs])
+    )
+
+    preds = []
+    trues = []
+
+    for i in test_indices:
+        k, j = dataset.samples[i]
+
+        if k in train_by_k and train_by_k[k]:
+            preds.append(float(np.mean(train_by_k[k])))
+        else:
+            preds.append(global_mean)
+
+        trues.append(float(np.log10(dataset.permx[k, j, :].mean())))
+
+    preds = np.asarray(preds, dtype=np.float64)
+    trues = np.asarray(trues, dtype=np.float64)
+
+    pred_perm = 10.0 ** preds
+    true_perm = 10.0 ** trues
+
+    return {
+        "log_mae": float(mean_absolute_error(trues, preds)),
+        "log_rmse": float(np.sqrt(mean_squared_error(trues, preds))),
+        "log_r2": float(r2_score(trues, preds)),
+        "perm_mae": float(mean_absolute_error(true_perm, pred_perm)),
+        "perm_rmse": float(np.sqrt(mean_squared_error(true_perm, pred_perm))),
+        "perm_r2": float(r2_score(true_perm, pred_perm)),
+    }
+
+
+# ============================================================
+# PLOTS
+# ============================================================
+
+def save_training_plot(history: Dict[str, List[float]]) -> None:
+    plt.figure(figsize=(8, 5))
+    plt.plot(history["train_loss"], label="Train Huber loss")
+    plt.plot(history["val_loss"], label="Validation Huber loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Huber loss")
+    plt.title("CNN training history (best validation seed)")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / "training_history.png", dpi=250)
+    plt.close()
+
+
+def save_prediction_plot(
+    true_log: np.ndarray,
+    pred_log: np.ndarray,
+    true_perm: np.ndarray,
+    pred_perm: np.ndarray,
+) -> None:
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+
+    axes[0].scatter(true_log, pred_log, alpha=0.8)
+    lo = min(true_log.min(), pred_log.min())
+    hi = max(true_log.max(), pred_log.max())
+    axes[0].plot([lo, hi], [lo, hi], linestyle="--", linewidth=1)
+    axes[0].set_xlabel("True log10(mean PERMX)")
+    axes[0].set_ylabel("Predicted log10(mean PERMX)")
+    axes[0].set_title("Best-seed test prediction - log scale")
+    axes[0].grid(True, alpha=0.3)
+
+    axes[1].scatter(true_perm, pred_perm, alpha=0.8)
+    lo = min(true_perm.min(), pred_perm.min())
+    hi = max(true_perm.max(), pred_perm.max())
+    axes[1].plot([lo, hi], [lo, hi], linestyle="--", linewidth=1)
+    axes[1].set_xlabel("True mean PERMX")
+    axes[1].set_ylabel("Predicted mean PERMX")
+    axes[1].set_title("Best-seed test prediction - original scale")
+    axes[1].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / "test_prediction.png", dpi=250)
+    plt.close()
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main() -> None:
+    print("=" * 72)
+    print("SPE9 CNN - SPATIAL BLOCK-HOLDOUT PERMEABILITY PREDICTION")
+    print("=" * 72)
+    print(f"Device: {DEVICE}")
+
+    print("\n[1/7] Loading real SPE9 data...")
+
+    permx, poro = prepare_grid()
+
+    print("\n[2/7] Building spatial dataset...")
+
+    base_dataset = ReservoirPatchDataset(permx, poro)
+
+    train_idx, val_idx, test_idx = make_spatial_indices(base_dataset)
+
+    print("\n[3/7] Fitting preprocessing on training region only...")
+
+    input_stats = normalize_input(base_dataset, train_idx)
+    target_scaler = normalize_target(base_dataset, train_idx)
+
+    print(
+        "Input statistics:\n"
+        f"  log10(PERMX): mean={input_stats[0]:.5f}, std={input_stats[1]:.5f}\n"
+        f"  PORO:         mean={input_stats[2]:.5f}, std={input_stats[3]:.5f}"
+    )
+
+    print(
+        "Target statistics (log10):\n"
+        f"  mean={target_scaler.mean_[0]:.5f}, "
+        f"std={target_scaler.scale_[0]:.5f}"
+    )
+
+    train_dataset = NormalizedReservoirDataset(base_dataset, train_idx, augment=True)
+    val_dataset = NormalizedReservoirDataset(base_dataset, val_idx, augment=False)
+    test_dataset = NormalizedReservoirDataset(base_dataset, test_idx, augment=False)
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=0,
+        pin_memory=torch.cuda.is_available(),
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=torch.cuda.is_available(),
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=torch.cuda.is_available(),
+    )
+
+    print("\n[4/7] Evaluating baselines...")
+
+    mean_metrics = baseline_train_mean(train_idx, test_idx, base_dataset)
+    same_k_metrics = baseline_same_k_train_mean(train_idx, test_idx, base_dataset)
+
+    print(
+        f"Train-mean baseline        | "
+        f"log_R2={mean_metrics['log_r2']:.4f} | "
+        f"log_RMSE={mean_metrics['log_rmse']:.4f} | "
+        f"perm_R2={mean_metrics['perm_r2']:.4f}"
+    )
+    print(
+        f"Same-K train-mean baseline | "
+        f"log_R2={same_k_metrics['log_r2']:.4f} | "
+        f"log_RMSE={same_k_metrics['log_rmse']:.4f} | "
+        f"perm_R2={same_k_metrics['perm_r2']:.4f}"
+    )
+
+    print("\n[5/7] Training across seeds...")
+
+    all_metrics: Dict[str, List[float]] = {
+        "log_mae": [],
+        "log_rmse": [],
+        "log_r2": [],
+        "perm_mae": [],
+        "perm_rmse": [],
+        "perm_r2": [],
+    }
+
+    best_overall_state = None
+    best_overall_val = float("inf")
+    best_history = None
+    best_seed = None
+
+    for run in range(N_SEEDS):
+        seed = SEED + run
+
+        print(f"\n--- Run {run + 1}/{N_SEEDS} (seed={seed}) ---")
+
+        set_seed(seed)
+        model = CNNReservoir()
+
+        model, history = train_model(
+            model,
+            train_loader,
+            val_loader,
+            target_scaler,
+        )
+
+        metrics = evaluate(model, test_loader, target_scaler)
+
+        for key in all_metrics:
+            all_metrics[key].append(metrics[key])
+
+        val_best = min(history["val_loss"])
+
+        if val_best < best_overall_val:
+            best_overall_val = val_best
+            best_overall_state = copy.deepcopy(model.state_dict())
+            best_history = history
+            best_seed = seed
+
+        print(
+            f"Run {run + 1} test | "
+            f"log_R2={metrics['log_r2']:.4f} | "
+            f"perm_R2={metrics['perm_r2']:.4f} | "
+            f"log_RMSE={metrics['log_rmse']:.4f}"
+        )
+
+    print("\n[6/7] Aggregating metrics across seeds...")
+
+    print("\n" + "=" * 72)
+    print("CNN TEST METRICS (mean +/- std over initialization seeds)")
+    print("=" * 72)
+
+    for key in all_metrics:
+        arr = np.asarray(all_metrics[key])
+        print(f"  {key:10s} : {arr.mean():.6f} +/- {arr.std():.6f}")
+
+    print("\nBaselines (single deterministic value on the same test set):")
+    print(
+        f"  train-mean        | log_R2={mean_metrics['log_r2']:.4f} | "
+        f"perm_R2={mean_metrics['perm_r2']:.4f}"
+    )
+    print(
+        f"  same-K train-mean | log_R2={same_k_metrics['log_r2']:.4f} | "
+        f"perm_R2={same_k_metrics['perm_r2']:.4f}"
+    )
+    print("=" * 72)
+
+    if best_overall_state is None:
+        raise RuntimeError("No model state was retained.")
+
+    torch.save(
+        {
+            "model_state_dict": best_overall_state,
+            "target_scaler_mean": target_scaler.mean_,
+            "target_scaler_scale": target_scaler.scale_,
+            "input_stats": input_stats,
+            "grid_shape_kji": GRID_SHAPE_KJI,
+            "patch_kj": PATCH_KJ,
+            "train_j": list(TRAIN_J),
+            "val_j": list(VAL_J),
+            "test_j": list(TEST_J),
+            "seed": SEED,
+            "n_seeds": N_SEEDS,
+            "best_seed": best_seed,
+            "best_val_loss": best_overall_val,
+            "criterion": "HuberLoss(delta=1.0)",
+            "learning_rate": LEARNING_RATE,
+            "weight_decay": WEIGHT_DECAY,
+            "batch_size": BATCH_SIZE,
+            "epochs": EPOCHS,
+            "patience": PATIENCE,
+        },
+        OUTPUT_DIR / "best_cnn_reservoir.pt",
+    )
+
+    print("\n[7/7] Saving plots and best-seed evaluation...")
+
+    set_seed(best_seed if best_seed is not None else SEED)
+    model = CNNReservoir()
+    model.load_state_dict(best_overall_state)
+    model.to(DEVICE)
+
+    final_metrics = evaluate(model, test_loader, target_scaler)
+
+    save_training_plot(best_history)
+    save_prediction_plot(
+        final_metrics["_true_log"],
+        final_metrics["_pred_log"],
+        final_metrics["_true_perm"],
+        final_metrics["_pred_perm"],
+    )
+
+    print("\nSaved:")
+    print(f"  {OUTPUT_DIR / 'best_cnn_reservoir.pt'}")
+    print(f"  {OUTPUT_DIR / 'training_history.png'}")
+    print(f"  {OUTPUT_DIR / 'test_prediction.png'}")
+
+
+if __name__ == "__main__":
+    main()
